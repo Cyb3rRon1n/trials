@@ -17,6 +17,7 @@ class FakeSonarr:
     def __init__(self, free=5e12):
         self.free, self.tags, self.next_id = free, {"trial": 1}, 100
         self.series_db, self.eps, self.lookups, self.calls = {}, {}, {}, []
+        self.remove_tag_fails = False
 
     def tag_id(self, label):
         return self.tags.setdefault(label, len(self.tags) + 1)
@@ -72,6 +73,9 @@ class FakeSonarr:
         self.calls.append(("monitor_all", sid))
 
     def remove_tag(self, sid, tag_id):
+        if self.remove_tag_fails:
+            self.remove_tag_fails = False
+            raise RuntimeError("remove_tag failed")
         self.series_db[sid]["tags"].remove(tag_id)
         self.calls.append(("untag", sid))
 
@@ -84,6 +88,7 @@ class FakeJellyfin:
     def __init__(self):
         self.users_list = [{"Id": "u1", "Name": "adriel"}, {"Id": "u2", "Name": "bobby"}]
         self.index, self.eps, self.like, self.calls = {}, {}, {}, []
+        self.notify_fails = False
 
     def users(self):
         return self.users_list
@@ -108,6 +113,8 @@ class FakeJellyfin:
         self.calls.append(("pos", item_id, user_id, ticks))
 
     def notify_paths(self, created=(), deleted=()):
+        if self.notify_fails:
+            raise Exception("Jellyfin notify_paths failed")
         self.calls.append(("notify", tuple(created), tuple(deleted)))
 
     def authenticate(self, username, password):

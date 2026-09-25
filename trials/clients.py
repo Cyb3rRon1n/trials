@@ -70,7 +70,7 @@ class Sonarr:
 
     def add_series(self, lookup, profile_id, root, tag_id):
         body = dict(lookup, qualityProfileId=profile_id, rootFolderPath=root, tags=[tag_id],
-                    monitored=True, seasonFolder=True,
+                    monitored=True, seasonFolder=True, monitorNewItems="none",
                     addOptions={"monitor": "none", "searchForMissingEpisodes": False,
                                 "searchForCutoffUnmetEpisodes": False})
         return self.http.call("POST", "/series", body=body)
