@@ -78,3 +78,20 @@ def test_unreject_admin_only(app):
     assert req(port, "POST", "/unreject", {"tvdb": "2002"}, login(port, "adriel"))[0] == 303
     st = state.load(cfg.state_path)
     assert st["rejected"] == [] and "2002" not in st["shows"]
+
+
+def test_jellyfin_outage_returns_503(app):
+    cfg, c, port = app
+    cookie = login(port, "bobby")
+    c.jellyfin.series_index = lambda: (_ for _ in ()).throw(RuntimeError("connection refused"))
+    status, _, body = req(port, "GET", "/", cookie=cookie)
+    assert status == 503 and "unreachable" in body.lower()
+    assert req(port, "GET", "/healthz")[0] == 200
+
+
+def test_logout_invalidates_session(app):
+    cfg, c, port = app
+    cookie = login(port, "bobby")
+    assert req(port, "POST", "/logout", cookie=cookie)[0] == 303
+    status, _, body = req(port, "GET", "/", cookie=cookie)
+    assert status == 200 and 'name="password"' in body
