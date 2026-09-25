@@ -1,0 +1,1 @@
+"""Trial Shows for Jellyfin."""
