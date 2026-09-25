@@ -165,9 +165,10 @@ def test_sonarr_monitor_all_and_search_request_shapes():
     # First call: GET series
     assert t.calls[0][0] == "GET"
 
-    # Second call: PUT series (monitored=True, season 0 unchanged, season 1 monitored)
+    # Second call: PUT series (monitored=True, monitorNewItems="all", season 0 unchanged, season 1 monitored)
     put_series_call = [c for c in t.calls if c[0] == "PUT" and "/series/" in c[1]][0]
     assert put_series_call[3]["monitored"] is True
+    assert put_series_call[3]["monitorNewItems"] == "all"
     assert put_series_call[3]["seasons"][0]["monitored"] is False  # season 0 unchanged
     assert put_series_call[3]["seasons"][1]["monitored"] is True   # season 1 monitored
 
