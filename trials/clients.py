@@ -112,6 +112,7 @@ class Sonarr:
     def monitor_all_and_search(self, sid):
         s = self.get_series(sid)
         s["monitored"] = True
+        s["monitorNewItems"] = "all"
         for x in s["seasons"]:
             if x["seasonNumber"] > 0:
                 x["monitored"] = True

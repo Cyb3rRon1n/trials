@@ -145,7 +145,7 @@ def finish_move(c, rec, index, users, now):
                      for e in c.jellyfin.season1_episodes(jf["Id"], users[0]["Id"]) if e.get("IndexNumber")}
         if needed - set(new_items) and age < GIVE_UP:
             return []
-        for user_id, item_id, played, ticks in restore_plan(rec["played"], new_items):
+        for user_id, item_id, played, ticks in restore_plan(snap, new_items):
             if played:
                 c.jellyfin.mark_played(item_id, user_id)
             else:

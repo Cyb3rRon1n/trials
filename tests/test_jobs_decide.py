@@ -1,4 +1,5 @@
 from datetime import timedelta
+import pytest
 from trials import state
 from trials.jobs import Clients, daily_decide, iso, weekly_add
 from fakes import FakeJellyfin, FakeNtfy, FakeSeerr, FakeSonarr, NOW, ep, make_cfg
@@ -132,10 +133,27 @@ def test_trial_tagged_series_not_in_state_is_ignored(tmp_path):
 
 def test_deletion_ceiling_deletes_nothing(tmp_path):
     cfg, c, st, rec, sid = world(tmp_path, max_deletes_per_run=0)
-    open_window_ended(c, st, rec, sid)
+    # Plain Show: no engagement -> delete
+    arrive(c, sid)
+    rec["window_start"] = iso(NOW - timedelta(days=22))
+    c.jellyfin.index[rec["path"]] = {"Id": "jf1"}
     c.jellyfin.eps[("jf1", "u1")] = [ep("e1", 1), ep("e2", 2), ep("e3", 3)]  # no engagement -> delete
+
+    # Liked Show: like -> keep
+    c.seerr.add_show(6, 1006, "Liked Show")
+    c.sonarr.lookups[1006] = {"title": "Liked Show", "tvdbId": 1006}
+    weekly_add(cfg, c, st, NOW - timedelta(days=30))
+    rec2 = st["shows"]["1006"]
+    sid2 = rec2["sonarr_id"]
+    arrive(c, sid2)
+    rec2["window_start"] = iso(NOW - timedelta(days=22))
+    c.jellyfin.index[f"/data/media/trials/Liked Show"] = {"Id": "jf6"}
+    c.jellyfin.eps[("jf6", "u1")] = [ep("f1", 1, True), ep("f2", 2, True), ep("f3", 3, True)]  # like
+    c.jellyfin.like[("jf6", "u1")] = True
+
     lines = daily_decide(cfg, c, st, NOW)
     assert "SAFETY STOP" in lines[0] and sid in c.sonarr.series_db and rec["status"] == "active"
+    assert ("move", sid2, "/data/media/tv") in c.sonarr.calls  # Liked Show still moved
 
 
 def test_new_episode_listed_after_setup_does_not_keep(tmp_path):
@@ -179,10 +197,8 @@ def test_keep_interrupted_resumes_next_run(tmp_path):
     c.jellyfin.like[("jf1", "u1")] = True
     # First run: make remove_tag raise on first call only
     c.sonarr.remove_tag_fails = True
-    try:
+    with pytest.raises(RuntimeError):
         daily_decide(cfg, c, st, NOW)
-    except RuntimeError:
-        pass
     assert rec["status"] == "moving" and rec.get("completed") and not rec.get("untagged")
     # Second run: remove_tag succeeds
     daily_decide(cfg, c, st, NOW + timedelta(days=1))
@@ -201,6 +217,7 @@ def test_finish_move_waits_for_all_episodes_then_gives_up_honestly(tmp_path):
     c.jellyfin.eps[("jf2", "u1")] = [ep("n1", 1)]
     lines = daily_decide(cfg, c, st, NOW + timedelta(days=1))
     assert rec["status"] == "moving"  # Still waiting
+    assert not [x for x in c.jellyfin.calls if x[0] in ("played", "pos")]  # No restore yet
     # After 7 days, give up
     lines = daily_decide(cfg, c, st, NOW + timedelta(days=8))
     assert rec["status"] == "kept"
@@ -208,17 +225,33 @@ def test_finish_move_waits_for_all_episodes_then_gives_up_honestly(tmp_path):
 
 
 def test_request_before_window_with_setup_pending_keeps(tmp_path):
-    cfg, c, st, rec, sid = world(tmp_path)
-    # Setup pending: Sonarr has no episodes yet
-    c.sonarr.eps[sid] = []
-    rec["setup_done"] = False
+    cfg = make_cfg(tmp_path)
+    c = Clients(FakeSonarr(), FakeJellyfin(), FakeSeerr(), FakeNtfy())
+    st = state.empty()
+    c.seerr.add_show(5, 1005, "Plain Show")
+    c.sonarr.lookups[1005] = {"title": "Plain Show", "tvdbId": 1005}
+    # Setup pending: wrap add_series to return no episodes
+    real_add = c.sonarr.add_series
+    def add_without_eps(*a):
+        s = real_add(*a)
+        c.sonarr.eps[s["id"]] = []
+        return s
+    c.sonarr.add_series = add_without_eps
+    weekly_add(cfg, c, st, NOW - timedelta(days=1))
+    rec = st["shows"]["1005"]
+    sid = rec["sonarr_id"]
+    assert rec["setup_done"] is False
+    # Restore add_series and give episodes
+    c.sonarr.add_series = real_add
+    c.sonarr.eps[sid] = [{"id": i + sid * 100, "seasonNumber": 1, "episodeNumber": i, "monitored": False, "hasFile": True}
+                         for i in range(1, 4)]
     arrive(c, sid)
     c.jellyfin.index[rec["path"]] = {"Id": "jf1"}
-    # Give episodes and add to requested
-    c.sonarr.eps[sid] = [{"id": i, "seasonNumber": 1, "episodeNumber": i, "monitored": False, "hasFile": True}
-                         for i in range(1, 4)]
+    # Add to requested
     c.seerr.requested.add(5)
     lines = daily_decide(cfg, c, st, NOW)
+    assert rec["setup_done"] is True
+    assert ("search", tuple(e["id"] for e in c.sonarr.eps[sid][:3])) in c.sonarr.calls
     assert ("move", sid, "/data/media/tv") in c.sonarr.calls
 
 
@@ -233,3 +266,21 @@ def test_dry_run_safety_stop_and_label_change(tmp_path):
     c.jellyfin.like[("jf1", "u1")] = True
     second = daily_decide(cfg, c, st, NOW)
     assert any("[dry-run] would KEEP" in l for l in second)
+
+
+def test_keep_without_snapshot_finishes_cleanly(tmp_path):
+    cfg, c, st, rec, sid = world(tmp_path, added_days_ago=1)
+    arrive(c, sid)
+    c.jellyfin.index[rec["path"]] = {"Id": "jf1"}
+    rec["window_start"] = iso(NOW)
+    # Request before Jellyfin had show (no snapshot taken)
+    c.seerr.requested.add(5)
+    lines = daily_decide(cfg, c, st, NOW)
+    assert ("move", sid, "/data/media/tv") in c.sonarr.calls
+    # Jellyfin now has the show at new location
+    c.jellyfin.index = {"/data/media/tv/Plain Show": {"Id": "jf2"}}
+    c.jellyfin.eps[("jf2", "u1")] = [ep("n1", 1), ep("n2", 2), ep("n3", 3)]
+    # Next run should not raise, set status "kept", make no played/pos calls (no snapshot)
+    lines = daily_decide(cfg, c, st, NOW + timedelta(days=1))
+    assert rec["status"] == "kept"
+    assert not [x for x in c.jellyfin.calls if x[0] in ("played", "pos")]
