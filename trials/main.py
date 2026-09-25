@@ -64,6 +64,8 @@ def scheduler(cfg, c, stop):
 
 
 def probe(cfg, c):
+    if not cfg.ntfy_topic:
+        print("WARNING: NTFY_TOPIC is empty - SAFETY STOP alerts will not be sent")
     print("sonarr series:", len(c.sonarr.series()))
     print("sonarr quality profile id:", c.sonarr.quality_profile_id(cfg.quality_profile))
     print(f"free at {cfg.trials_root}: {c.sonarr.free_bytes(cfg.trials_root) / 1e12:.2f} TB")

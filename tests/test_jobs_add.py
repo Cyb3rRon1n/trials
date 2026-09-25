@@ -1,5 +1,5 @@
 from trials import state
-from trials.jobs import Clients, weekly_add
+from trials.jobs import Clients, iso, weekly_add
 from fakes import FakeJellyfin, FakeNtfy, FakeSeerr, FakeSonarr, NOW, make_cfg
 
 
@@ -51,6 +51,21 @@ def test_low_disk_space_adds_nothing(tmp_path):
     c.sonarr.lookups[1005] = {"title": "Plain Show", "tvdbId": 1005}
     lines = weekly_add(cfg, c, st, NOW)
     assert st["shows"] == {} and "skipped" in lines[0]
+
+
+def test_weekly_add_respects_already_added_this_week(tmp_path):
+    cfg, c, st = setup(tmp_path, trials_per_week=3)
+    st["shows"]["9001"] = {"tvdb": 9001, "added_at": iso(NOW), "status": "active"}
+    st["shows"]["9002"] = {"tvdb": 9002, "added_at": iso(NOW), "status": "active"}
+    c.seerr.add_show(5, 1005, "Plain Show")
+    c.seerr.add_show(6, 1006, "Second Show")
+    c.sonarr.lookups[1005] = {"title": "Plain Show", "tvdbId": 1005}
+    c.sonarr.lookups[1006] = {"title": "Second Show", "tvdbId": 1006}
+
+    weekly_add(cfg, c, st, NOW)
+
+    added = [k for k in st["shows"] if k not in ("9001", "9002")]
+    assert len(added) == 1
 
 
 def test_setup_deferred_when_sonarr_has_no_episodes_yet(tmp_path):

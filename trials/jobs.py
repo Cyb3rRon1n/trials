@@ -76,9 +76,13 @@ def weekly_add(cfg, c, st, now, lines=None):
     skip = _skip_set(st, now) | {s["tvdbId"] for s in c.sonarr.series()}
     tag = c.sonarr.tag_id(TAG)
     profile = c.sonarr.quality_profile_id(cfg.quality_profile)
+    week = now.strftime("%G-W%V")
+    already = sum(1 for rec in st["shows"].values()
+                  if rec.get("added_at") and parse(rec["added_at"]).strftime("%G-W%V") == week)
+    target = max(0, cfg.trials_per_week - already)
     added = 0
     for item in c.seerr.trending_tv():
-        if added >= cfg.trials_per_week:
+        if added >= target:
             break
         det = c.seerr.tv(item["id"])
         tvdb = (det.get("externalIds") or {}).get("tvdbId")
@@ -197,7 +201,8 @@ def daily_decide(cfg, c, st, now, lines=None):
     keeps, drops = [], []
     for rec in st["shows"].values():
         if rec["status"] == "moving":
-            if rec["sonarr_id"] not in series:
+            s = series.get(rec["sonarr_id"])
+            if not s or s.get("tvdbId") != rec["tvdb"]:
                 rec["status"] = "released"
                 lines.append(f"{rec['title']}: removed from Sonarr during move")
                 continue
@@ -207,7 +212,7 @@ def daily_decide(cfg, c, st, now, lines=None):
         if rec["status"] != "active":
             continue
         s = series.get(rec["sonarr_id"])
-        if not s or tag not in s.get("tags", []):
+        if not s or tag not in s.get("tags", []) or s.get("tvdbId") != rec["tvdb"]:
             rec["status"] = "released"
             lines.append(f"{rec['title']}: no longer a trial in Sonarr (tag removed or series deleted) - left alone")
             continue
@@ -248,10 +253,10 @@ def daily_decide(cfg, c, st, now, lines=None):
             lines.append(f"[dry-run] would hit SAFETY STOP: {len(drops)} deletions due (> {cfg.max_deletes_per_run})")
         for label, group in (("KEEP", keeps), ("DELETE", drops)):
             for rec, _, why in group:
+                rec["dry_run"] = f"would {label} ({why})"
                 old_label = rec.get("dry_run_label")
                 if old_label != label:
                     rec["dry_run_label"] = label
-                    rec["dry_run"] = f"would {label} ({why})"
                     lines.append(f"[dry-run] would {label} {rec['title']} ({why})")
         return lines
 

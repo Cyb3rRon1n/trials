@@ -178,6 +178,29 @@ def test_files_present_but_not_indexed_never_dropped(tmp_path):
     assert any("hasn't indexed" in l for l in lines)
 
 
+def test_sonarr_id_reused_by_different_series_releases(tmp_path):
+    cfg, c, st, rec, sid = world(tmp_path)
+    open_window_ended(c, st, rec, sid)
+    c.sonarr.series_db[sid]["tvdbId"] = 9999  # sonarr id reused by a different series
+    daily_decide(cfg, c, st, NOW)
+    assert rec["status"] == "released"
+    assert not [x for x in c.sonarr.calls if x[0] in ("delete", "move")]
+
+
+def test_dry_run_refreshes_counts_without_duplicate_notify(tmp_path):
+    cfg, c, st, rec, sid = world(tmp_path, enforce=False)
+    open_window_ended(c, st, rec, sid)
+    c.jellyfin.eps[("jf1", "u1")] = [ep("e1", 1), ep("e2", 2), ep("e3", 3)]
+    c.jellyfin.like[("jf1", "u1")] = False
+    daily_decide(cfg, c, st, NOW)
+    assert rec["dry_run"] == "would DELETE (0 like / 1 dislike)"
+    c.jellyfin.eps[("jf1", "u2")] = [ep("g1", 1), ep("g2", 2), ep("g3", 3)]
+    c.jellyfin.like[("jf1", "u2")] = False
+    second = daily_decide(cfg, c, st, NOW)
+    assert second == []
+    assert rec["dry_run"] == "would DELETE (0 like / 2 dislike)"
+
+
 def test_missing_jellyfin_episodes_postpones_instead_of_rejecting(tmp_path):
     cfg, c, st, rec, sid = world(tmp_path)
     open_window_ended(c, st, rec, sid)
