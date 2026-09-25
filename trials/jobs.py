@@ -6,6 +6,7 @@ from .library import choose_destination, ep_key, restore_plan
 
 TAG = "trial"
 UNAVAILABLE_COOLDOWN = timedelta(days=30)
+GIVE_UP = timedelta(days=7)
 
 
 @dataclass
@@ -40,12 +41,20 @@ def setup_trial(c, rec, episodes, n):
         rec["setup_done"] = False
         return False
     sid = rec["sonarr_id"]
-    c.sonarr.set_season_monitored(sid, 1, True)
     c.sonarr.set_monitored([e["id"] for e in episodes if e["id"] not in trial], False)
     c.sonarr.set_monitored(trial, True)
     c.sonarr.search_episodes(trial)
+    rec["known_episode_ids"] = sorted(e["id"] for e in episodes)
     rec["setup_done"] = True
     return True
+
+
+def _notify_jellyfin(c, created=(), deleted=()):
+    try:
+        c.jellyfin.notify_paths(created=created, deleted=deleted)
+        return ""
+    except Exception as e:  # Jellyfin's own scan will catch up; never un-record a real change for this
+        return f" (Jellyfin not notified: {e})"
 
 
 def _skip_set(st, now):
@@ -58,16 +67,18 @@ def _skip_set(st, now):
     return skip
 
 
-def weekly_add(cfg, c, st, now):
+def weekly_add(cfg, c, st, now, lines=None):
+    lines = [] if lines is None else lines
     free = c.sonarr.free_bytes(cfg.trials_root)
     if free < cfg.min_free_tb * 1e12:
-        return [f"skipped weekly add: only {free / 1e12:.2f} TB free (< {cfg.min_free_tb} TB)"]
+        lines.append(f"skipped weekly add: only {free / 1e12:.2f} TB free (< {cfg.min_free_tb} TB)")
+        return lines
     skip = _skip_set(st, now) | {s["tvdbId"] for s in c.sonarr.series()}
     tag = c.sonarr.tag_id(TAG)
     profile = c.sonarr.quality_profile_id(cfg.quality_profile)
-    lines = []
+    added = 0
     for item in c.seerr.trending_tv():
-        if len(lines) >= cfg.trials_per_week:
+        if added >= cfg.trials_per_week:
             break
         det = c.seerr.tv(item["id"])
         tvdb = (det.get("externalIds") or {}).get("tvdbId")
@@ -82,16 +93,27 @@ def weekly_add(cfg, c, st, now):
             "added_at": iso(now), "window_start": None, "status": "active",
             "dest": choose_destination([g["name"] for g in det.get("genres") or []], det.get("originCountry") or [],
                                        cfg.tv_root, cfg.anime_root, cfg.drama_root),
-            "played": None, "reported": False, "setup_done": False, "dry_run": None}
+            "played": None, "setup_done": False, "dry_run": None}
         skip.add(tvdb)
         setup_trial(c, rec, c.sonarr.episodes(s["id"]), cfg.trial_episodes)
         lines.append(f"trial added: {s['title']} (S01E01-E{cfg.trial_episodes:02d}) -> Trials library")
+        added += 1
     return lines
 
 
-def user_extended(episodes, n):
+def user_extended(rec, episodes, n):
     trial = {e["id"] for e in trial_eps(episodes, n)}
-    return any(e.get("monitored") and e["id"] not in trial for e in episodes)
+    known = set(rec.get("known_episode_ids") or [])
+    return any(e.get("monitored") and e["id"] not in trial and e["id"] in known for e in episodes)
+
+
+def _finish_keep_steps(c, rec, tag):
+    if not rec.get("completed"):
+        c.sonarr.monitor_all_and_search(rec["sonarr_id"])
+        rec["completed"] = True
+    if not rec.get("untagged"):
+        c.sonarr.remove_tag(rec["sonarr_id"], tag)
+        rec["untagged"] = True
 
 
 def user_views(c, jf_id, users, n):
@@ -109,57 +131,77 @@ def user_views(c, jf_id, users, n):
 
 
 def finish_move(c, rec, index, users, now):
+    snap = rec.get("played") or {}
+    needed = {k for eps in snap.values() for k in eps}
+    age = now - parse(rec["moved_at"])
     jf = index.get(rec["new_path"].rstrip("/"))
     if not jf:
-        if now - parse(rec["moved_at"]) > timedelta(days=2):
-            return [f"{rec['title']}: moved, but Jellyfin hasn't picked it up after 2 days - watched marks not restored yet"]
-        return []
-    if users and rec.get("played"):
+        if age < GIVE_UP:
+            return []
+        rec.update(status="kept", played=None)
+        return [f"{rec['title']}: kept, but Jellyfin never showed its new location after 7 days - watched marks NOT restored"]
+    if users:
         new_items = {ep_key(1, e["IndexNumber"]): e["Id"]
                      for e in c.jellyfin.season1_episodes(jf["Id"], users[0]["Id"]) if e.get("IndexNumber")}
+        if needed - set(new_items) and age < GIVE_UP:
+            return []
         for user_id, item_id, played, ticks in restore_plan(rec["played"], new_items):
             if played:
                 c.jellyfin.mark_played(item_id, user_id)
             else:
                 c.jellyfin.set_position(item_id, user_id, ticks)
+        missing = sorted(needed - set(new_items))
+    else:
+        new_items = {}
+        missing = sorted(needed)
     rec.update(status="kept", played=None)
+    if missing:
+        return [f"{rec['title']}: kept, watched marks restored except {missing} (not found in Jellyfin after 7 days)"]
     return [f"{rec['title']}: now in its permanent library, watched marks restored"]
 
 
 def apply_keep(cfg, c, rec, s, tag, index, users, now, why):
     jf = index.get(s["path"].rstrip("/"))
-    if jf and rec.get("played") is None:
+    if jf:
         _, rec["played"] = user_views(c, jf["Id"], users, cfg.trial_episodes)
     old = s["path"]
     new = c.sonarr.move_series(s["id"], rec["dest"])
-    rec.update(status="moving", new_path=new, moved_at=iso(now))
-    c.sonarr.monitor_all_and_search(s["id"])
-    c.sonarr.remove_tag(s["id"], tag)
-    c.jellyfin.notify_paths(created=[new], deleted=[old])
-    return f"KEPT {rec['title']} ({why}) -> {new}; downloading the rest"
+    rec.update(status="moving", new_path=new, moved_at=iso(now), completed=False, untagged=False)
+    _finish_keep_steps(c, rec, tag)
+    msg = f"KEPT {rec['title']} ({why}) -> {new}; downloading the rest"
+    msg += _notify_jellyfin(c, created=[new], deleted=[old])
+    return msg
 
 
 def apply_drop(c, st, rec, s, why, now):
     unavailable = why == "unavailable"
     c.sonarr.delete_series(s["id"], exclude=not unavailable)
-    c.jellyfin.notify_paths(deleted=[s["path"]])
     if unavailable:
         rec.update(status="unavailable", dropped_at=iso(now))
-        return f"DROPPED {rec['title']}: trial episodes never arrived"
-    rec["status"] = "rejected"
-    st["rejected"].append(rec["tvdb"])
-    return f"REJECTED {rec['title']} ({why}) - deleted"
+        msg = f"DROPPED {rec['title']}: trial episodes never arrived"
+    else:
+        rec["status"] = "rejected"
+        st["rejected"].append(rec["tvdb"])
+        msg = f"REJECTED {rec['title']} ({why}) - deleted"
+    msg += _notify_jellyfin(c, deleted=[s["path"]])
+    return msg
 
 
-def daily_decide(cfg, c, st, now):
+def daily_decide(cfg, c, st, now, lines=None):
+    lines = [] if lines is None else lines
     n = cfg.trial_episodes
     series = {s["id"]: s for s in c.sonarr.series()}
     tag = c.sonarr.tag_id(TAG)
     users = c.jellyfin.users()
     index = c.jellyfin.series_index()
-    lines, keeps, drops = [], [], []
+    keeps, drops = [], []
     for rec in st["shows"].values():
         if rec["status"] == "moving":
+            if rec["sonarr_id"] not in series:
+                rec["status"] = "released"
+                lines.append(f"{rec['title']}: removed from Sonarr during move")
+                continue
+            _finish_keep_steps(c, rec, tag)
             lines += finish_move(c, rec, index, users, now)
             continue
         if rec["status"] != "active":
@@ -173,12 +215,12 @@ def daily_decide(cfg, c, st, now):
         if not rec.get("setup_done"):
             setup_trial(c, rec, eps, n)
             eps = c.sonarr.episodes(s["id"])
-        if c.seerr.requested_since(rec["tmdb"], rec["added_at"]) or user_extended(eps, n):
+        if c.seerr.requested_since(rec["tmdb"], rec["added_at"]) or user_extended(rec, eps, n):
             keeps.append((rec, s, "requested by a user"))
             continue
         if rec["window_start"] is None:
             t = trial_eps(eps, n)
-            if len(t) == n and all(e["hasFile"] for e in t):
+            if len(t) == n and all(e["hasFile"] for e in t) and s["path"].rstrip("/") in index:
                 rec["window_start"] = iso(now)
                 lines.append(f"{rec['title']}: trial episodes arrived - voting open for {cfg.window_days} days")
             elif now - parse(rec["added_at"]) > timedelta(days=cfg.arrival_days):
@@ -190,16 +232,23 @@ def daily_decide(cfg, c, st, now):
         if not jf:
             lines.append(f"{rec['title']}: not found in Jellyfin - decision postponed")
             continue
-        views, rec["played"] = user_views(c, jf["Id"], users, n)
+        views, snap = user_views(c, jf["Id"], users, n)
+        if not any(len(v) == n for v in snap.values()):
+            lines.append(f"{rec['title']}: Jellyfin doesn't show all {n} trial episodes yet - decision postponed")
+            continue
+        rec["played"] = snap
         verdict, likes, dislikes = decide(views, n)
         (keeps if verdict == "keep" else drops).append((rec, s, f"{likes} like / {dislikes} dislike"))
 
     if not cfg.enforce:
+        if len(drops) > cfg.max_deletes_per_run:
+            lines.append(f"[dry-run] would hit SAFETY STOP: {len(drops)} deletions due (> {cfg.max_deletes_per_run})")
         for label, group in (("KEEP", keeps), ("DELETE", drops)):
             for rec, _, why in group:
-                rec["dry_run"] = f"would {label} ({why})"
-                if not rec.get("reported"):
-                    rec["reported"] = True
+                old_label = rec.get("dry_run_label")
+                if old_label != label:
+                    rec["dry_run_label"] = label
+                    rec["dry_run"] = f"would {label} ({why})"
                     lines.append(f"[dry-run] would {label} {rec['title']} ({why})")
         return lines
 

@@ -31,6 +31,11 @@ def test_window_starts_when_all_trial_eps_arrive(tmp_path):
     daily_decide(cfg, c, st, NOW)
     assert rec["window_start"] is None
     arrive(c, sid)
+    # Window doesn't open without Jellyfin path
+    lines = daily_decide(cfg, c, st, NOW)
+    assert rec["window_start"] is None
+    # Window opens once path is in Jellyfin
+    c.jellyfin.index[rec["path"]] = {"Id": "jf1"}
     lines = daily_decide(cfg, c, st, NOW)
     assert rec["window_start"] == iso(NOW) and "voting open" in lines[0]
 
@@ -64,7 +69,7 @@ def test_majority_like_keeps_moves_then_restores_watched(tmp_path):
 def test_majority_dislike_rejects_with_exclusion(tmp_path):
     cfg, c, st, rec, sid = world(tmp_path)
     open_window_ended(c, st, rec, sid)
-    c.jellyfin.eps[("jf1", "u1")] = [ep("e1", 1, True)]      # quit after 1 -> dislike
+    c.jellyfin.eps[("jf1", "u1")] = [ep("e1", 1, True), ep("e2", 2), ep("e3", 3)]      # watched 1, quit -> dislike
     lines = daily_decide(cfg, c, st, NOW)
     assert ("delete", sid, True) in c.sonarr.calls and rec["status"] == "rejected"
     assert st["rejected"] == [1005] and any("REJECTED" in l for l in lines)
@@ -73,17 +78,20 @@ def test_majority_dislike_rejects_with_exclusion(tmp_path):
 def test_nobody_engaged_rejects(tmp_path):
     cfg, c, st, rec, sid = world(tmp_path)
     open_window_ended(c, st, rec, sid)
+    c.jellyfin.eps[("jf1", "u1")] = [ep("e1", 1), ep("e2", 2), ep("e3", 3)]  # no engagement
     daily_decide(cfg, c, st, NOW)
-    assert rec["status"] == "rejected"
+    assert ("delete", sid, True) in c.sonarr.calls and rec["status"] == "rejected"
+    assert st["rejected"] == [1005]
 
 
 def test_dry_run_reports_once_and_changes_nothing(tmp_path):
     cfg, c, st, rec, sid = world(tmp_path, enforce=False)
     open_window_ended(c, st, rec, sid)
+    c.jellyfin.eps[("jf1", "u1")] = [ep("e1", 1), ep("e2", 2), ep("e3", 3)]  # no engagement
     first = daily_decide(cfg, c, st, NOW)
     second = daily_decide(cfg, c, st, NOW)
     assert any("[dry-run] would DELETE" in l for l in first) and second == []
-    assert not [x for x in c.sonarr.calls if x[0] in ("delete", "move")]
+    assert not [x for x in c.sonarr.calls if x[0] in ("delete", "move", "monitor_all", "untag")]
     assert rec["status"] == "active" and rec["dry_run"].startswith("would DELETE")
 
 
@@ -125,5 +133,103 @@ def test_trial_tagged_series_not_in_state_is_ignored(tmp_path):
 def test_deletion_ceiling_deletes_nothing(tmp_path):
     cfg, c, st, rec, sid = world(tmp_path, max_deletes_per_run=0)
     open_window_ended(c, st, rec, sid)
+    c.jellyfin.eps[("jf1", "u1")] = [ep("e1", 1), ep("e2", 2), ep("e3", 3)]  # no engagement -> delete
     lines = daily_decide(cfg, c, st, NOW)
     assert "SAFETY STOP" in lines[0] and sid in c.sonarr.series_db and rec["status"] == "active"
+
+
+def test_new_episode_listed_after_setup_does_not_keep(tmp_path):
+    cfg, c, st, rec, sid = world(tmp_path)
+    arrive(c, sid)
+    c.jellyfin.index[rec["path"]] = {"Id": "jf1"}
+    daily_decide(cfg, c, st, NOW)  # Window opens
+    # New episode listed after setup
+    c.sonarr.eps[sid].append({"id": 99999, "seasonNumber": 1, "episodeNumber": 11, "monitored": True, "hasFile": False})
+    rec["window_start"] = iso(NOW - timedelta(days=5))  # Window not ended yet
+    daily_decide(cfg, c, st, NOW)
+    assert rec["status"] == "active"
+    assert not [x for x in c.sonarr.calls if x[0] == "move"]
+
+
+def test_missing_jellyfin_episodes_postpones_instead_of_rejecting(tmp_path):
+    cfg, c, st, rec, sid = world(tmp_path)
+    open_window_ended(c, st, rec, sid)
+    # No episodes for any user
+    lines = daily_decide(cfg, c, st, NOW)
+    assert rec["status"] == "active"
+    assert not [x for x in c.sonarr.calls if x[0] == "delete"]
+    assert any("decision postponed" in l for l in lines)
+
+
+def test_drop_is_recorded_even_if_jellyfin_notify_fails(tmp_path):
+    cfg, c, st, rec, sid = world(tmp_path)
+    open_window_ended(c, st, rec, sid)
+    c.jellyfin.eps[("jf1", "u1")] = [ep("e1", 1, True), ep("e2", 2), ep("e3", 3)]  # dislike
+    c.jellyfin.notify_fails = True
+    lines = daily_decide(cfg, c, st, NOW)
+    assert rec["status"] == "rejected"
+    assert 1005 in st["rejected"]
+    assert any("Jellyfin not notified" in l for l in lines)
+
+
+def test_keep_interrupted_resumes_next_run(tmp_path):
+    cfg, c, st, rec, sid = world(tmp_path)
+    open_window_ended(c, st, rec, sid)
+    c.jellyfin.eps[("jf1", "u1")] = [ep("e1", 1, True), ep("e2", 2, True), ep("e3", 3, True)]  # like
+    c.jellyfin.like[("jf1", "u1")] = True
+    # First run: make remove_tag raise on first call only
+    c.sonarr.remove_tag_fails = True
+    try:
+        daily_decide(cfg, c, st, NOW)
+    except RuntimeError:
+        pass
+    assert rec["status"] == "moving" and rec.get("completed") and not rec.get("untagged")
+    # Second run: remove_tag succeeds
+    daily_decide(cfg, c, st, NOW + timedelta(days=1))
+    move_calls = [x for x in c.sonarr.calls if x[0] == "move"]
+    assert len(move_calls) == 1  # Only one move call total
+    assert ("untag", sid) in c.sonarr.calls
+
+
+def test_finish_move_waits_for_all_episodes_then_gives_up_honestly(tmp_path):
+    cfg, c, st, rec, sid = world(tmp_path)
+    open_window_ended(c, st, rec, sid)
+    c.jellyfin.eps[("jf1", "u1")] = [ep("e1", 1, True), ep("e2", 2, True), ep("e3", 3, True)]  # like
+    daily_decide(cfg, c, st, NOW)
+    # Jellyfin scans new location but only has first episode
+    c.jellyfin.index = {"/data/media/tv/Plain Show": {"Id": "jf2"}}
+    c.jellyfin.eps[("jf2", "u1")] = [ep("n1", 1)]
+    lines = daily_decide(cfg, c, st, NOW + timedelta(days=1))
+    assert rec["status"] == "moving"  # Still waiting
+    # After 7 days, give up
+    lines = daily_decide(cfg, c, st, NOW + timedelta(days=8))
+    assert rec["status"] == "kept"
+    assert any("except" in l and "7 days" in l for l in lines)
+
+
+def test_request_before_window_with_setup_pending_keeps(tmp_path):
+    cfg, c, st, rec, sid = world(tmp_path)
+    # Setup pending: Sonarr has no episodes yet
+    c.sonarr.eps[sid] = []
+    rec["setup_done"] = False
+    arrive(c, sid)
+    c.jellyfin.index[rec["path"]] = {"Id": "jf1"}
+    # Give episodes and add to requested
+    c.sonarr.eps[sid] = [{"id": i, "seasonNumber": 1, "episodeNumber": i, "monitored": False, "hasFile": True}
+                         for i in range(1, 4)]
+    c.seerr.requested.add(5)
+    lines = daily_decide(cfg, c, st, NOW)
+    assert ("move", sid, "/data/media/tv") in c.sonarr.calls
+
+
+def test_dry_run_safety_stop_and_label_change(tmp_path):
+    cfg, c, st, rec, sid = world(tmp_path, enforce=False, max_deletes_per_run=0)
+    open_window_ended(c, st, rec, sid)
+    c.jellyfin.eps[("jf1", "u1")] = [ep("e1", 1), ep("e2", 2), ep("e3", 3)]  # dislike -> delete
+    first = daily_decide(cfg, c, st, NOW)
+    assert any("would hit SAFETY STOP" in l for l in first)
+    assert any("[dry-run] would DELETE" in l for l in first)
+    # Change verdict: give user a like
+    c.jellyfin.like[("jf1", "u1")] = True
+    second = daily_decide(cfg, c, st, NOW)
+    assert any("[dry-run] would KEEP" in l for l in second)

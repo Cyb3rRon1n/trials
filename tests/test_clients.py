@@ -100,6 +100,7 @@ def test_sonarr_add_series_request_shape():
     assert body["tags"] == [5]
     assert body["monitored"] is True
     assert body["seasonFolder"] is True
+    assert body["monitorNewItems"] == "none"
     assert body["addOptions"]["monitor"] == "none"
     assert body["addOptions"]["searchForMissingEpisodes"] is False
     assert body["addOptions"]["searchForCutoffUnmetEpisodes"] is False
