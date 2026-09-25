@@ -1,0 +1,13 @@
+- Trial Shows:
+    href: https://trials.totallylegitmedia.us
+    icon: mdi-thumbs-up-down
+    description: Vote to keep or drop this week's trial shows (Trials library in Jellyfin)
+    siteMonitor: http://trials:8080/healthz
+- Trial Shows alerts:
+    href: https://ntfy.sh/NTFY_TOPIC_FROM_ENV
+    icon: ntfy.png
+    description: Keep/drop decisions and safety alerts from Trial Shows
+    widget:
+      type: ntfy
+      url: https://ntfy.sh
+      topic: NTFY_TOPIC_FROM_ENV
