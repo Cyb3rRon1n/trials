@@ -169,6 +169,15 @@ def test_new_episode_listed_after_setup_does_not_keep(tmp_path):
     assert not [x for x in c.sonarr.calls if x[0] == "move"]
 
 
+def test_files_present_but_not_indexed_never_dropped(tmp_path):
+    cfg, c, st, rec, sid = world(tmp_path)  # added 30 days ago
+    arrive(c, sid)  # all 3 trial eps hasFile, but path never added to c.jellyfin.index
+    lines = daily_decide(cfg, c, st, NOW)
+    assert not [x for x in c.sonarr.calls if x[0] == "delete"]
+    assert rec["status"] == "active"
+    assert any("hasn't indexed" in l for l in lines)
+
+
 def test_missing_jellyfin_episodes_postpones_instead_of_rejecting(tmp_path):
     cfg, c, st, rec, sid = world(tmp_path)
     open_window_ended(c, st, rec, sid)
