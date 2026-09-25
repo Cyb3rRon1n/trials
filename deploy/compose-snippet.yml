@@ -1,0 +1,16 @@
+  trials:
+    build: /home/sentinel/trials
+    image: trials:local
+    container_name: trials
+    restart: unless-stopped
+    user: "1000:1000"
+    env_file: /home/sentinel/trials/.env
+    volumes:
+      - ./config/trials:/data
+    networks:
+      - default
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 256m
