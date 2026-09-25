@@ -220,9 +220,12 @@ def daily_decide(cfg, c, st, now, lines=None):
             continue
         if rec["window_start"] is None:
             t = trial_eps(eps, n)
-            if len(t) == n and all(e["hasFile"] for e in t) and s["path"].rstrip("/") in index:
+            all_have_files = len(t) == n and all(e["hasFile"] for e in t)
+            if all_have_files and s["path"].rstrip("/") in index:
                 rec["window_start"] = iso(now)
                 lines.append(f"{rec['title']}: trial episodes arrived - voting open for {cfg.window_days} days")
+            elif all_have_files:
+                lines.append(f"{rec['title']}: files present but Jellyfin hasn't indexed {s['path']} yet - waiting")
             elif now - parse(rec["added_at"]) > timedelta(days=cfg.arrival_days):
                 drops.append((rec, s, "unavailable"))
             continue
