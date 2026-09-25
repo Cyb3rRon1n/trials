@@ -1,0 +1,19 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "trials"
+version = "0.1.0"
+description = "Trial Shows for Jellyfin: weekly trending-show trials, votes, keep-or-delete."
+readme = "README.md"
+requires-python = ">=3.11"
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["trials"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
