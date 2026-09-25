@@ -156,9 +156,10 @@ def make_server(cfg, c, host="0.0.0.0", port=None):
                     return self._send(403, "admins only", "text/plain")
                 tvdb = int(form.get("tvdb") or 0)
                 with state_mod.locked(cfg.state_path) as st:
-                    if tvdb in st["rejected"]:
-                        st["rejected"].remove(tvdb)
-                    st["shows"].pop(str(tvdb), None)
+                    if st["shows"].get(str(tvdb), {}).get("status") == "rejected":
+                        if tvdb in st["rejected"]:
+                            st["rejected"].remove(tvdb)
+                        st["shows"].pop(str(tvdb), None)
                 return self._redirect()
             self._send(404, "not found", "text/plain")
 

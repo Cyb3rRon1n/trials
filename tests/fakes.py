@@ -54,9 +54,6 @@ class FakeSonarr:
                 if e["id"] in ids:
                     e["monitored"] = monitored
 
-    def set_season_monitored(self, sid, season, monitored):
-        self.calls.append(("season", sid, season, monitored))
-
     def search_episodes(self, ids):
         self.calls.append(("search", tuple(ids)))
 

@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 import threading
 from trials import state
 from trials.jobs import Clients, iso
-from trials.main import due, run_job, scheduler
+from trials.main import due, probe, run_job, scheduler
 from fakes import FakeJellyfin, FakeNtfy, FakeSeerr, FakeSonarr, make_cfg, NOW, ep
 from trials.jobs import daily_decide, weekly_add
 
@@ -110,6 +110,13 @@ def test_run_job_failure_still_reports_completed_actions(tmp_path):
     assert c.ntfy.sent, "ntfy should have been called"
     ntfy_message = c.ntfy.sent[0][1]
     assert "KEPT" in ntfy_message, f"ntfy message should contain KEPT: {ntfy_message}"
+
+
+def test_probe_warns_on_empty_ntfy_topic(tmp_path, capsys):
+    cfg = make_cfg(tmp_path)
+    c = Clients(FakeSonarr(), FakeJellyfin(), FakeSeerr(), FakeNtfy())
+    probe(cfg, c)
+    assert "WARNING: NTFY_TOPIC is empty" in capsys.readouterr().out
 
 
 def test_scheduler_survives_corrupt_state(tmp_path, capsys):

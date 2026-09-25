@@ -80,6 +80,14 @@ def test_unreject_admin_only(app):
     assert st["rejected"] == [] and "2002" not in st["shows"]
 
 
+def test_unreject_active_show_is_left_untouched(app):
+    cfg, c, port = app
+    status, _, _ = req(port, "POST", "/unreject", {"tvdb": "1005"}, login(port, "adriel"))
+    assert status == 303
+    st = state.load(cfg.state_path)
+    assert st["shows"]["1005"]["status"] == "active"
+
+
 def test_jellyfin_outage_returns_503(app):
     cfg, c, port = app
     cookie = login(port, "bobby")

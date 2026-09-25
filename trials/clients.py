@@ -82,13 +82,6 @@ class Sonarr:
         if ids:
             self.http.call("PUT", "/episode/monitor", body={"episodeIds": list(ids), "monitored": monitored})
 
-    def set_season_monitored(self, sid, season, monitored):
-        s = self.get_series(sid)
-        for x in s["seasons"]:
-            if x["seasonNumber"] == season:
-                x["monitored"] = monitored
-        self.http.call("PUT", f"/series/{sid}", body=s)
-
     def search_episodes(self, ids):
         if ids:
             self.http.call("POST", "/command", body={"name": "EpisodeSearch", "episodeIds": list(ids)})
@@ -143,7 +136,8 @@ class Jellyfin:
         return {i["Path"].rstrip("/"): i for i in r["Items"] if i.get("Path")}
 
     def season1_episodes(self, series_id, user_id):
-        return self.http.call("GET", f"/Shows/{series_id}/Episodes", {"userId": user_id, "season": 1})["Items"]
+        return self.http.call("GET", f"/Shows/{series_id}/Episodes",
+                              {"userId": user_id, "season": 1, "IsMissing": "false"})["Items"]
 
     def likes(self, item_id, user_id):
         return (self.http.call("GET", f"/Items/{item_id}", {"userId": user_id}).get("UserData") or {}).get("Likes")

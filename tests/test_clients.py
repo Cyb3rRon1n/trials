@@ -186,6 +186,13 @@ def test_sonarr_monitor_all_and_search_request_shapes():
     assert t.calls[-1][3]["seriesId"] == 5
 
 
+def test_jellyfin_season1_episodes_excludes_missing():
+    t = FakeTransport({("GET", "http://j/Shows/s1/Episodes"): (200, {"Items": []})})
+    Jellyfin("http://j", "K", t).season1_episodes("s1", "u1")
+    method, url, _, _ = t.calls[0]
+    assert method == "GET" and "IsMissing=false" in url
+
+
 def test_jellyfin_notify_paths_empty_no_call():
     t = FakeTransport({})
     Jellyfin("http://j", "K", t).notify_paths()
