@@ -119,7 +119,7 @@ def make_server(cfg, c, host="0.0.0.0", port=None):
             n = int(self.headers.get("Content-Length") or 0)
             return {k: v[0] for k, v in urllib.parse.parse_qs(self.rfile.read(n).decode()).items()}
 
-        def do_GET(self):
+        def _handle_get(self):
             if self.path == "/healthz":
                 return self._send(200, "ok", "text/plain")
             if self.path != "/":
@@ -127,7 +127,7 @@ def make_server(cfg, c, host="0.0.0.0", port=None):
             user = self._user()
             self._send(200, render_page(cfg, c, user) if user else render_login())
 
-        def do_POST(self):
+        def _handle_post(self):
             form = self._form()
             if self.path == "/login":
                 user = c.jellyfin.authenticate(form.get("username", ""), form.get("password", ""))
@@ -161,5 +161,19 @@ def make_server(cfg, c, host="0.0.0.0", port=None):
                     st["shows"].pop(str(tvdb), None)
                 return self._redirect()
             self._send(404, "not found", "text/plain")
+
+        def do_GET(self):
+            try:
+                self._handle_get()
+            except Exception as e:
+                print(f"trials web error on {self.command} {self.path}: {e}", flush=True)
+                self._send(503, page('<h1>Trial Shows</h1><p class="lead">Jellyfin or Sonarr is unreachable right now - try again in a minute.</p>'))
+
+        def do_POST(self):
+            try:
+                self._handle_post()
+            except Exception as e:
+                print(f"trials web error on {self.command} {self.path}: {e}", flush=True)
+                self._send(503, page('<h1>Trial Shows</h1><p class="lead">Jellyfin or Sonarr is unreachable right now - try again in a minute.</p>'))
 
     return ThreadingHTTPServer((host, cfg.port if port is None else port), Handler)
