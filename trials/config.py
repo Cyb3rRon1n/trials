@@ -15,6 +15,7 @@ class Config:
     jellyfin_url: str
     jellyfin_key: str
     jellyfin_public_url: str
+    trials_public_url: str = ""
     ntfy_url: str = "https://ntfy.sh"
     ntfy_topic: str = ""
     quality_profile: str = "HD-1080p"

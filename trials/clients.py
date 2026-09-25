@@ -3,6 +3,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+TRIAL_MARK = "🗳 ON TRIAL"
 AUTH_CLIENT = 'MediaBrowser Client="trials", Device="trials-web", DeviceId="trials-web", Version="0.1.0"'
 
 
@@ -68,9 +69,9 @@ class Sonarr:
         found = self.http.call("GET", "/series/lookup", {"term": f"tvdb:{tvdb}"})
         return found[0] if found else None
 
-    def add_series(self, lookup, profile_id, root, tag_id):
+    def add_series(self, lookup, profile_id, root, tag_id, series_type="standard"):
         body = dict(lookup, qualityProfileId=profile_id, rootFolderPath=root, tags=[tag_id],
-                    monitored=True, seasonFolder=True, monitorNewItems="none",
+                    monitored=True, seasonFolder=True, monitorNewItems="none", seriesType=series_type,
                     addOptions={"monitor": "none", "searchForMissingEpisodes": False,
                                 "searchForCutoffUnmetEpisodes": False})
         return self.http.call("POST", "/series", body=body)
@@ -155,6 +156,21 @@ class Jellyfin:
     def set_position(self, item_id, user_id, ticks):
         self.http.call("POST", f"/UserItems/{item_id}/UserData", {"userId": user_id},
                        body={"PlaybackPositionTicks": ticks})
+
+    def set_trial_note(self, item_id, user_id, note):
+        """Put `note` at the top of the item's overview (locked so metadata refreshes keep it); None removes it."""
+        item = self.http.call("GET", f"/Items/{item_id}", {"userId": user_id})
+        overview = item.get("Overview") or ""
+        if overview.startswith(TRIAL_MARK):
+            overview = overview.split("\n\n", 1)[1] if "\n\n" in overview else ""
+        locked = [f for f in (item.get("LockedFields") or []) if f != "Overview"]
+        if note:
+            item["Overview"] = note + ("\n\n" + overview if overview else "")
+            locked.append("Overview")
+        else:
+            item["Overview"] = overview
+        item["LockedFields"] = locked
+        self.http.call("POST", f"/Items/{item_id}", body=item)
 
     def notify_paths(self, created=(), deleted=()):
         ups = [{"Path": p, "UpdateType": "Created"} for p in created] + \

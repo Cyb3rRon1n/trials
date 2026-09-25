@@ -207,3 +207,34 @@ def test_jellyfin_notify_paths_request_shape():
     assert len(body["Updates"]) == 2
     assert body["Updates"][0] == {"Path": "/data/show1", "UpdateType": "Created"}
     assert body["Updates"][1] == {"Path": "/data/show2", "UpdateType": "Deleted"}
+
+
+def test_sonarr_add_series_series_type():
+    t = FakeTransport({("POST", "http://s/api/v3/series"): (201, {"id": 99})})
+    s = Sonarr("http://s", "k", t)
+    s.add_series({"title": "A", "tvdbId": 1}, profile_id=1, root="/data", tag_id=5)
+    s.add_series({"title": "B", "tvdbId": 2}, profile_id=1, root="/data", tag_id=5, series_type="anime")
+    assert t.calls[0][3]["seriesType"] == "standard" and t.calls[1][3]["seriesType"] == "anime"
+
+
+def test_jellyfin_set_trial_note_prepends_locks_and_is_idempotent():
+    item = {"Id": "i1", "Overview": "Real synopsis.", "LockedFields": ["Name"]}
+    t = FakeTransport({("GET", "http://j/Items/i1"): (200, item), ("POST", "http://j/Items/i1"): (204, None)})
+    Jellyfin("http://j", "K", t).set_trial_note("i1", "u1", "🗳 ON TRIAL until Fri 16 Oct – vote at https://t")
+    body = t.calls[-1][3]
+    assert t.calls[-1][0] == "POST"
+    assert body["Overview"] == "🗳 ON TRIAL until Fri 16 Oct – vote at https://t\n\nReal synopsis."
+    assert sorted(body["LockedFields"]) == ["Name", "Overview"]
+    # re-noting an already-noted item replaces the note instead of stacking it
+    item2 = dict(item, Overview=body["Overview"], LockedFields=body["LockedFields"])
+    t2 = FakeTransport({("GET", "http://j/Items/i1"): (200, item2), ("POST", "http://j/Items/i1"): (204, None)})
+    Jellyfin("http://j", "K", t2).set_trial_note("i1", "u1", "🗳 ON TRIAL until Sat 17 Oct – vote at https://t")
+    assert t2.calls[-1][3]["Overview"] == "🗳 ON TRIAL until Sat 17 Oct – vote at https://t\n\nReal synopsis."
+
+
+def test_jellyfin_clear_trial_note_restores_and_unlocks():
+    item = {"Id": "i1", "Overview": "🗳 ON TRIAL until Fri 16 Oct – vote\n\nReal synopsis.", "LockedFields": ["Overview", "Name"]}
+    t = FakeTransport({("GET", "http://j/Items/i1"): (200, item), ("POST", "http://j/Items/i1"): (204, None)})
+    Jellyfin("http://j", "K", t).set_trial_note("i1", "u1", None)
+    body = t.calls[-1][3]
+    assert body["Overview"] == "Real synopsis." and body["LockedFields"] == ["Name"]

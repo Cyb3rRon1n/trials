@@ -91,18 +91,33 @@ def weekly_add(cfg, c, st, now, lines=None):
         lookup = c.sonarr.lookup_tvdb(tvdb)
         if not lookup:
             continue
-        s = c.sonarr.add_series(lookup, profile, cfg.trials_root, tag)
+        dest = choose_destination([g["name"] for g in det.get("genres") or []], det.get("originCountry") or [],
+                                  cfg.tv_root, cfg.anime_root, cfg.drama_root)
+        # anime releases use absolute numbering; as "standard" Sonarr matches other arcs' "E01"
+        s = c.sonarr.add_series(lookup, profile, cfg.trials_root, tag,
+                                series_type="anime" if dest == cfg.anime_root else "standard")
         rec = st["shows"][str(tvdb)] = {
             "tvdb": tvdb, "tmdb": item["id"], "title": s["title"], "sonarr_id": s["id"], "path": s["path"],
-            "added_at": iso(now), "window_start": None, "status": "active",
-            "dest": choose_destination([g["name"] for g in det.get("genres") or []], det.get("originCountry") or [],
-                                       cfg.tv_root, cfg.anime_root, cfg.drama_root),
+            "added_at": iso(now), "window_start": None, "status": "active", "dest": dest,
             "played": None, "setup_done": False, "dry_run": None}
         skip.add(tvdb)
         setup_trial(c, rec, c.sonarr.episodes(s["id"]), cfg.trial_episodes)
         lines.append(f"trial added: {s['title']} (S01E01-E{cfg.trial_episodes:02d}) -> Trials library")
         added += 1
     return lines
+
+
+def _mark_on_trial(cfg, c, rec, jf_id, users, lines):
+    """Best-effort: tell Jellyfin viewers the show is on trial and where to vote. Never aborts a run."""
+    if not cfg.trials_public_url or rec.get("noted") or not users or not rec.get("window_start"):
+        return
+    end = parse(rec["window_start"]) + timedelta(days=cfg.window_days)
+    note = f"🗳 ON TRIAL until {end.strftime('%a %d %b')} – vote to keep or drop it at {cfg.trials_public_url}"
+    try:
+        c.jellyfin.set_trial_note(jf_id, users[0]["Id"], note)
+        rec["noted"] = True
+    except Exception as e:
+        lines.append(f"{rec['title']}: couldn't add the on-trial note in Jellyfin: {e}")
 
 
 def user_extended(rec, episodes, n):
@@ -168,6 +183,12 @@ def apply_keep(cfg, c, rec, s, tag, index, users, now, why):
     jf = index.get(s["path"].rstrip("/"))
     if jf:
         _, rec["played"] = user_views(c, jf["Id"], users, cfg.trial_episodes)
+        if rec.get("noted") and users:
+            try:  # cosmetic; the move normally gives Jellyfin a fresh item anyway
+                c.jellyfin.set_trial_note(jf["Id"], users[0]["Id"], None)
+                rec["noted"] = False
+            except Exception:
+                pass
     old = s["path"]
     new = c.sonarr.move_series(s["id"], rec["dest"])
     rec.update(status="moving", new_path=new, moved_at=iso(now), completed=False, untagged=False)
@@ -229,12 +250,15 @@ def daily_decide(cfg, c, st, now, lines=None):
             if all_have_files and s["path"].rstrip("/") in index:
                 rec["window_start"] = iso(now)
                 lines.append(f"{rec['title']}: trial episodes arrived - voting open for {cfg.window_days} days")
+                _mark_on_trial(cfg, c, rec, index[s["path"].rstrip("/")]["Id"], users, lines)
             elif all_have_files:
                 lines.append(f"{rec['title']}: files present but Jellyfin hasn't indexed {s['path']} yet - waiting")
             elif now - parse(rec["added_at"]) > timedelta(days=cfg.arrival_days):
                 drops.append((rec, s, "unavailable"))
             continue
         if now < parse(rec["window_start"]) + timedelta(days=cfg.window_days):
+            if s["path"].rstrip("/") in index:
+                _mark_on_trial(cfg, c, rec, index[s["path"].rstrip("/")]["Id"], users, lines)
             continue
         jf = index.get(s["path"].rstrip("/"))
         if not jf:
