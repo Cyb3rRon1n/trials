@@ -2176,9 +2176,9 @@ Expected: `drwxr-xr-x sentinel sentinel ... trials`, then `/data/media/trials`.
 - [ ] **Step 3: Jellyfin Trials library + user access + API key**
 
 ```bash
-ssh 192.168.10.157 python3 - <<'EOF'
-import json, urllib.request, urllib.parse
-H = {"Authorization": 'MediaBrowser Token="REDACTED"', "Content-Type": "application/json"}
+ssh 192.168.10.157 'K=$(grep -A6 "type: jellyfin" ~/vulcan/stack/config/homepage/services.yaml | grep -oE "key: *[a-f0-9]{32}" | head -1 | awk "{print \$2}") python3 -' <<'EOF'
+import json, os, urllib.request, urllib.parse
+H = {"Authorization": f'MediaBrowser Token="{os.environ["K"]}"', "Content-Type": "application/json"}
 def call(m, p, body=None):
     r = urllib.request.urlopen(urllib.request.Request("http://localhost:8096" + p, json.dumps(body).encode() if body is not None else None, H, method=m))
     raw = r.read(); return json.loads(raw) if raw else None
