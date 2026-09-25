@@ -84,3 +84,117 @@ def test_ntfy_noop_without_topic_and_posts_with_topic():
     assert t.calls == []
     Ntfy("https://n", "topic", t).send("T", "m")
     assert t.calls[0][1] == "https://n/topic" and t.calls[0][2]["Title"] == "T"
+
+
+# Request-shape tests for write/destructive calls
+
+def test_sonarr_add_series_request_shape():
+    t = FakeTransport({("POST", "http://s/api/v3/series"): (201, {"id": 99})})
+    lookup = {"title": "Show", "tvdbId": 123}
+    Sonarr("http://s", "k", t).add_series(lookup, profile_id=1, root="/data", tag_id=5)
+    method, url, _, body = t.calls[0]
+    assert method == "POST" and url == "http://s/api/v3/series"
+    assert body["title"] == "Show" and body["tvdbId"] == 123
+    assert body["qualityProfileId"] == 1
+    assert body["rootFolderPath"] == "/data"
+    assert body["tags"] == [5]
+    assert body["monitored"] is True
+    assert body["seasonFolder"] is True
+    assert body["addOptions"]["monitor"] == "none"
+    assert body["addOptions"]["searchForMissingEpisodes"] is False
+    assert body["addOptions"]["searchForCutoffUnmetEpisodes"] is False
+
+
+def test_sonarr_delete_series_exclude_true():
+    t = FakeTransport({("DELETE", "http://s/api/v3/series/10"): (200, {})})
+    Sonarr("http://s", "k", t).delete_series(10, exclude=True)
+    method, url, _, _ = t.calls[0]
+    assert method == "DELETE"
+    assert "deleteFiles=true" in url
+    assert "addImportListExclusion=true" in url
+
+
+def test_sonarr_delete_series_exclude_false():
+    t = FakeTransport({("DELETE", "http://s/api/v3/series/10"): (200, {})})
+    Sonarr("http://s", "k", t).delete_series(10, exclude=False)
+    method, url, _, _ = t.calls[0]
+    assert method == "DELETE"
+    assert "deleteFiles=true" in url
+    assert "addImportListExclusion=false" in url
+
+
+def test_sonarr_remove_tag_keeps_other_tags():
+    t = FakeTransport({("GET", "http://s/api/v3/series/7"): (200, {"id": 7, "tags": [1, 2, 3]}),
+                       ("PUT", "http://s/api/v3/series/7"): (202, {})})
+    Sonarr("http://s", "k", t).remove_tag(7, 2)
+    method, url, _, body = t.calls[-1]
+    assert method == "PUT"
+    assert body["tags"] == [1, 3]
+
+
+def test_sonarr_set_monitored_empty_list_no_call():
+    t = FakeTransport({})
+    Sonarr("http://s", "k", t).set_monitored([], True)
+    assert t.calls == []
+
+
+def test_sonarr_set_monitored_request_shape():
+    t = FakeTransport({("PUT", "http://s/api/v3/episode/monitor"): (202, {})})
+    Sonarr("http://s", "k", t).set_monitored([10, 20, 30], True)
+    method, url, _, body = t.calls[0]
+    assert method == "PUT" and url == "http://s/api/v3/episode/monitor"
+    assert body == {"episodeIds": [10, 20, 30], "monitored": True}
+
+
+def test_sonarr_monitor_all_and_search_request_shapes():
+    t = FakeTransport({
+        ("GET", "http://s/api/v3/series/5"): (200, {
+            "id": 5, "monitored": False,
+            "seasons": [{"seasonNumber": 0, "monitored": False}, {"seasonNumber": 1, "monitored": False}]
+        }),
+        ("GET", "http://s/api/v3/episode"): (200, [
+            {"id": 100, "seasonNumber": 0}, {"id": 101, "seasonNumber": 1}, {"id": 102, "seasonNumber": 1}
+        ]),
+        ("PUT", "http://s/api/v3/series/5"): (202, {}),
+        ("PUT", "http://s/api/v3/episode/monitor"): (202, {}),
+        ("POST", "http://s/api/v3/command"): (201, {})
+    })
+    Sonarr("http://s", "k", t).monitor_all_and_search(5)
+
+    # First call: GET series
+    assert t.calls[0][0] == "GET"
+
+    # Second call: PUT series (monitored=True, season 0 unchanged, season 1 monitored)
+    put_series_call = [c for c in t.calls if c[0] == "PUT" and "/series/" in c[1]][0]
+    assert put_series_call[3]["monitored"] is True
+    assert put_series_call[3]["seasons"][0]["monitored"] is False  # season 0 unchanged
+    assert put_series_call[3]["seasons"][1]["monitored"] is True   # season 1 monitored
+
+    # Third call: GET episodes
+    assert t.calls[2][0] == "GET" and "/episode" in t.calls[2][1]
+
+    # Fourth call: PUT episode/monitor with only season >0 episodes
+    put_episode_call = [c for c in t.calls if c[0] == "PUT" and "/episode/monitor" in c[1]][0]
+    assert put_episode_call[3]["episodeIds"] == [101, 102]
+    assert put_episode_call[3]["monitored"] is True
+
+    # Last call: POST command SeriesSearch
+    assert t.calls[-1][0] == "POST" and "/command" in t.calls[-1][1]
+    assert t.calls[-1][3]["name"] == "SeriesSearch"
+    assert t.calls[-1][3]["seriesId"] == 5
+
+
+def test_jellyfin_notify_paths_empty_no_call():
+    t = FakeTransport({})
+    Jellyfin("http://j", "K", t).notify_paths()
+    assert t.calls == []
+
+
+def test_jellyfin_notify_paths_request_shape():
+    t = FakeTransport({("POST", "http://j/Library/Media/Updated"): (200, {})})
+    Jellyfin("http://j", "K", t).notify_paths(created=["/data/show1"], deleted=["/data/show2"])
+    method, url, _, body = t.calls[0]
+    assert method == "POST" and url == "http://j/Library/Media/Updated"
+    assert len(body["Updates"]) == 2
+    assert body["Updates"][0] == {"Path": "/data/show1", "UpdateType": "Created"}
+    assert body["Updates"][1] == {"Path": "/data/show2", "UpdateType": "Deleted"}
