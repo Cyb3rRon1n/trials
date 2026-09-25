@@ -1,7 +1,8 @@
 from datetime import datetime, timedelta, timezone
+import threading
 from trials import state
 from trials.jobs import Clients, iso
-from trials.main import due, run_job
+from trials.main import due, run_job, scheduler
 from fakes import FakeJellyfin, FakeNtfy, FakeSeerr, FakeSonarr, make_cfg, NOW, ep
 from trials.jobs import daily_decide, weekly_add
 
@@ -109,3 +110,35 @@ def test_run_job_failure_still_reports_completed_actions(tmp_path):
     assert c.ntfy.sent, "ntfy should have been called"
     ntfy_message = c.ntfy.sent[0][1]
     assert "KEPT" in ntfy_message, f"ntfy message should contain KEPT: {ntfy_message}"
+
+
+def test_scheduler_survives_corrupt_state(tmp_path, capsys):
+    cfg = make_cfg(tmp_path)
+    c = Clients(FakeSonarr(), FakeJellyfin(), FakeSeerr(), FakeNtfy())
+
+    # Write invalid JSON to state file
+    with open(cfg.state_path, 'w') as f:
+        f.write("{ invalid json }")
+
+    # Create a stop event that will trigger after one iteration
+    stop = threading.Event()
+
+    # Monkeypatch stop.wait to set the event and return so loop runs exactly once
+    original_wait = stop.wait
+    iterations = [0]
+
+    def wait_once(timeout=None):
+        iterations[0] += 1
+        if iterations[0] >= 1:
+            stop.set()
+        return False
+
+    stop.wait = wait_once
+
+    # Call scheduler directly - should not raise despite corrupt state
+    scheduler(cfg, c, stop)
+
+    # Capture output and verify error was logged
+    captured = capsys.readouterr()
+    assert "trials scheduler error:" in captured.out
+    assert "JSONDecodeError" in captured.out
