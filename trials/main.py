@@ -29,6 +29,7 @@ def due(now, st):
 
 def run_job(name, cfg, c, now):
     lines = []
+    # ponytail: one lock for the whole job (incl. API calls) - an admin /unreject waits for a running job (minutes at most); split into read/act/write phases if that ever matters
     with state_mod.locked(cfg.state_path) as st:
         try:
             if name == "add":
@@ -53,9 +54,12 @@ def run_job(name, cfg, c, now):
 
 def scheduler(cfg, c, stop):
     while not stop.is_set():
-        now = datetime.now(timezone.utc)
-        for name in due(now, state_mod.load(cfg.state_path)):
-            run_job(name, cfg, c, now)
+        try:
+            now = datetime.now(timezone.utc)
+            for name in due(now, state_mod.load(cfg.state_path)):
+                run_job(name, cfg, c, now)
+        except Exception as e:
+            print(f"trials scheduler error: {type(e).__name__}: {e}", flush=True)
         stop.wait(600)
 
 
