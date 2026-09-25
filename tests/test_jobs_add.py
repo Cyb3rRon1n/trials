@@ -74,10 +74,21 @@ def test_setup_deferred_when_sonarr_has_no_episodes_yet(tmp_path):
     c.sonarr.lookups[1005] = {"title": "Plain Show", "tvdbId": 1005}
     real_add = c.sonarr.add_series
 
-    def add_without_eps(*a):
-        s = real_add(*a)
+    def add_without_eps(*a, **kw):
+        s = real_add(*a, **kw)
         c.sonarr.eps[s["id"]] = []
         return s
     c.sonarr.add_series = add_without_eps
     weekly_add(cfg, c, st, NOW)
     assert st["shows"]["1005"]["setup_done"] is False
+
+
+def test_anime_destination_adds_series_as_anime_type(tmp_path):
+    cfg, c, st = setup(tmp_path)
+    c.seerr.add_show(4, 1004, "Anime One", genres=("Animation",), origin=("JP",))
+    c.seerr.add_show(5, 1005, "Plain Show")
+    for tvdb, t in [(1004, "Anime One"), (1005, "Plain Show")]:
+        c.sonarr.lookups[tvdb] = {"title": t, "tvdbId": tvdb}
+    weekly_add(cfg, c, st, NOW)
+    types = {s["title"]: s["seriesType"] for s in c.sonarr.series_db.values()}
+    assert types == {"Anime One": "anime", "Plain Show": "standard"}

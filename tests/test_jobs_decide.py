@@ -264,8 +264,8 @@ def test_request_before_window_with_setup_pending_keeps(tmp_path):
     c.sonarr.lookups[1005] = {"title": "Plain Show", "tvdbId": 1005}
     # Setup pending: wrap add_series to return no episodes
     real_add = c.sonarr.add_series
-    def add_without_eps(*a):
-        s = real_add(*a)
+    def add_without_eps(*a, **kw):
+        s = real_add(*a, **kw)
         c.sonarr.eps[s["id"]] = []
         return s
     c.sonarr.add_series = add_without_eps
@@ -316,3 +316,52 @@ def test_keep_without_snapshot_finishes_cleanly(tmp_path):
     lines = daily_decide(cfg, c, st, NOW + timedelta(days=1))
     assert rec["status"] == "kept"
     assert not [x for x in c.jellyfin.calls if x[0] in ("played", "pos")]
+
+
+def test_on_trial_note_added_when_voting_opens(tmp_path):
+    cfg, c, st, rec, sid = world(tmp_path, added_days_ago=1, trials_public_url="https://trials.example")
+    arrive(c, sid)
+    c.jellyfin.index[rec["path"]] = {"Id": "jf1"}
+    daily_decide(cfg, c, st, NOW)
+    note = c.jellyfin.notes["jf1"]
+    end = NOW + timedelta(days=cfg.window_days)
+    assert note.startswith("🗳 ON TRIAL until " + end.strftime("%a %d %b")) and "https://trials.example" in note
+    assert rec["noted"] is True
+    daily_decide(cfg, c, st, NOW + timedelta(days=1))
+    assert [x for x in c.jellyfin.calls if x[0] == "note"] == [("note", "jf1", note)]   # not re-applied
+
+
+def test_on_trial_note_backfilled_for_open_windows(tmp_path):
+    cfg, c, st, rec, sid = world(tmp_path, trials_public_url="https://trials.example")
+    arrive(c, sid)
+    rec["window_start"] = iso(NOW - timedelta(days=2))          # opened before notes existed
+    c.jellyfin.index[rec["path"]] = {"Id": "jf1"}
+    daily_decide(cfg, c, st, NOW)
+    assert "jf1" in c.jellyfin.notes and rec["noted"] is True
+
+
+def test_no_note_without_public_url(tmp_path):
+    cfg, c, st, rec, sid = world(tmp_path, added_days_ago=1)
+    arrive(c, sid)
+    c.jellyfin.index[rec["path"]] = {"Id": "jf1"}
+    daily_decide(cfg, c, st, NOW)
+    assert c.jellyfin.notes == {} and rec["window_start"] == iso(NOW)
+
+
+def test_note_failure_never_aborts_the_run(tmp_path):
+    cfg, c, st, rec, sid = world(tmp_path, added_days_ago=1, trials_public_url="https://trials.example")
+    arrive(c, sid)
+    c.jellyfin.index[rec["path"]] = {"Id": "jf1"}
+    c.jellyfin.note_fails = True
+    lines = daily_decide(cfg, c, st, NOW)
+    assert rec["window_start"] == iso(NOW) and not rec.get("noted")
+    assert any("on-trial note" in l for l in lines)
+
+
+def test_keep_clears_the_on_trial_note(tmp_path):
+    cfg, c, st, rec, sid = world(tmp_path, trials_public_url="https://trials.example")
+    open_window_ended(c, st, rec, sid)
+    rec["noted"] = True
+    c.jellyfin.eps[("jf1", "u1")] = [ep("e1", 1, True), ep("e2", 2, True), ep("e3", 3, True)]
+    daily_decide(cfg, c, st, NOW)
+    assert ("note", "jf1", None) in c.jellyfin.calls and rec["status"] == "moving"

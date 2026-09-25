@@ -31,9 +31,10 @@ class FakeSonarr:
     def lookup_tvdb(self, tvdb):
         return self.lookups.get(tvdb)
 
-    def add_series(self, lookup, profile_id, root, tag_id):
+    def add_series(self, lookup, profile_id, root, tag_id, series_type="standard"):
         sid, self.next_id = self.next_id, self.next_id + 1
-        s = dict(lookup, id=sid, path=f"{root}/{lookup['title']}", tags=[tag_id], rootFolderPath=root)
+        s = dict(lookup, id=sid, path=f"{root}/{lookup['title']}", tags=[tag_id], rootFolderPath=root,
+                 seriesType=series_type)
         self.series_db[sid] = s
         self.eps[sid] = [{"id": sid * 100 + i, "seasonNumber": 1, "episodeNumber": i,
                           "monitored": False, "hasFile": False} for i in range(1, 11)]
@@ -86,6 +87,14 @@ class FakeJellyfin:
         self.users_list = [{"Id": "u1", "Name": "adriel"}, {"Id": "u2", "Name": "bobby"}]
         self.index, self.eps, self.like, self.calls = {}, {}, {}, []
         self.notify_fails = False
+        self.note_fails = False
+        self.notes = {}
+
+    def set_trial_note(self, item_id, user_id, note):
+        if self.note_fails:
+            raise RuntimeError("jellyfin item update failed")
+        self.notes[item_id] = note
+        self.calls.append(("note", item_id, note))
 
     def users(self):
         return self.users_list
