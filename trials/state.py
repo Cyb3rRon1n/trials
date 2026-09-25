@@ -1,4 +1,5 @@
 import contextlib
+import fcntl
 import json
 import os
 import threading
@@ -31,8 +32,14 @@ def save(path, st):
 @contextlib.contextmanager
 def locked(path):
     with _LOCK:
-        st = load(path)
+        fd = open(path + ".lock", "a")
         try:
-            yield st
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            st = load(path)
+            try:
+                yield st
+            finally:
+                save(path, st)
         finally:
-            save(path, st)
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            fd.close()

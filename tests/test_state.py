@@ -1,4 +1,7 @@
 import json
+import subprocess
+import sys
+import time
 import pytest
 from trials import state
 
@@ -27,3 +30,23 @@ def test_locked_saves_even_on_error(tmp_path):
             st["rejected"].append(42)
             raise RuntimeError("boom")
     assert json.load(open(p))["rejected"] == [42]
+
+
+def test_locked_is_exclusive_across_processes(tmp_path):
+    p = str(tmp_path / "s.json")
+    code = (
+        "from trials import state\n"
+        f"with state.locked({p!r}):\n"
+        "    print('held', flush=True)\n"
+        "    import time; time.sleep(0.6)\n"
+    )
+    import pathlib
+    repo_root = pathlib.Path(__file__).resolve().parent.parent
+    proc = subprocess.Popen([sys.executable, "-c", code], cwd=str(repo_root), stdout=subprocess.PIPE, text=True)
+    assert proc.stdout.readline().strip() == "held"
+    start = time.monotonic()
+    with state.locked(p):
+        pass
+    elapsed = time.monotonic() - start
+    proc.wait(timeout=5)
+    assert elapsed >= 0.4
