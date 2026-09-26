@@ -70,6 +70,10 @@ class FakeSonarr:
     def monitor_all_and_search(self, sid):
         self.calls.append(("monitor_all", sid))
 
+    def add_tag(self, sid, tag_id):
+        self.series_db[sid]["tags"].append(tag_id)
+        self.calls.append(("tag", sid))
+
     def remove_tag(self, sid, tag_id):
         if self.remove_tag_fails:
             self.remove_tag_fails = False
@@ -86,6 +90,7 @@ class FakeJellyfin:
     def __init__(self):
         self.users_list = [{"Id": "u1", "Name": "adriel"}, {"Id": "u2", "Name": "bobby"}]
         self.index, self.eps, self.like, self.calls = {}, {}, {}, []
+        self.movies, self.udata, self.recent = {}, {}, {}
         self.notify_fails = False
         self.note_fails = False
         self.notes = {}
@@ -104,6 +109,18 @@ class FakeJellyfin:
 
     def season1_episodes(self, series_id, user_id):
         return self.eps.get((series_id, user_id), [])
+
+    def all_episodes(self, series_id, user_id):
+        return self.eps.get((series_id, user_id), [])
+
+    def movie_index(self):
+        return dict(self.movies)
+
+    def user_data(self, item_id, user_id):
+        return self.udata.get((item_id, user_id), {})
+
+    def recently_played(self, user_id, limit=40):
+        return self.recent.get(user_id, [])
 
     def likes(self, item_id, user_id):
         return self.like.get((item_id, user_id))
@@ -125,7 +142,8 @@ class FakeJellyfin:
 
     def authenticate(self, username, password):
         users = {("adriel", "pw"): {"id": "u1", "name": "adriel", "admin": True},
-                 ("bobby", "pw"): {"id": "u2", "name": "bobby", "admin": False}}
+                 ("bobby", "pw"): {"id": "u2", "name": "bobby", "admin": False},   # admin via cfg.admins, not Jellyfin
+                 ("palma", "pw"): {"id": "u3", "name": "palma", "admin": False}}
         return users.get((username, password))
 
 
@@ -160,3 +178,38 @@ class FakeNtfy:
 
     def send(self, title, message):
         self.sent.append((title, message))
+
+
+class FakeRadarr:
+    def __init__(self):
+        self.tags, self.movies_db, self.calls = {"trial": 1}, {}, []
+
+    def tag_id(self, label):
+        return self.tags.setdefault(label, len(self.tags) + 1)
+
+    def add(self, mid, tmdb, title, path, year=2026, has_file=True, tags=()):
+        self.movies_db[mid] = {"id": mid, "tmdbId": tmdb, "title": title, "year": year, "path": path,
+                               "hasFile": has_file, "tags": list(tags)}
+
+    def movies(self):
+        return [dict(m) for m in self.movies_db.values()]
+
+    def get_movie(self, mid):
+        return dict(self.movies_db[mid])
+
+    def add_tag(self, mid, tag_id):
+        self.movies_db[mid]["tags"].append(tag_id)
+
+    def remove_tag(self, mid, tag_id):
+        self.movies_db[mid]["tags"].remove(tag_id)
+        self.calls.append(("untag", mid))
+
+    def move_movie(self, mid, root):
+        m = self.movies_db[mid]
+        m["path"] = root + "/" + m["path"].rsplit("/", 1)[-1]
+        self.calls.append(("move", mid, root))
+        return m["path"]
+
+    def delete_movie(self, mid, exclude):
+        self.movies_db.pop(mid)
+        self.calls.append(("delete", mid, exclude))
