@@ -26,4 +26,4 @@ def test_restore_plan_maps_by_episode_and_skips_untouched():
     snap = {"u2": {"S01E01": {"played": True, "ticks": 0}, "S01E02": {"played": False, "ticks": 555}},
             "u1": {"S01E01": {"played": False, "ticks": 0}, "S01E03": {"played": True, "ticks": 0}}}
     new = {"S01E01": "n1", "S01E02": "n2"}          # S01E03 not scanned yet
-    assert restore_plan(snap, new) == [("u2", "n1", True, 0), ("u2", "n2", False, 555)]
+    assert restore_plan(snap, new) == [("u2", "n1", True, 0, 0, None), ("u2", "n2", False, 555, 0, None)]

@@ -22,5 +22,5 @@ def restore_plan(snapshot, new_items):
             item_id = new_items.get(key)
             played, ticks = bool(st.get("played")), int(st.get("ticks") or 0)
             if item_id and (played or ticks > 0):
-                plan.append((user_id, item_id, played, ticks))
+                plan.append((user_id, item_id, played, ticks, int(st.get("count") or 0), st.get("date")))
     return plan
