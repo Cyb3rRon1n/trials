@@ -117,6 +117,39 @@ def _skip_set(st, now):
     return skip
 
 
+GENRE_ALIASES = {"sci-fi": "science fiction", "scifi": "science fiction"}
+
+
+def genres_of(names):
+    out = set()
+    for n in names:
+        n = n.lower().strip()
+        n = GENRE_ALIASES.get(n, n)
+        out |= {GENRE_ALIASES.get(p.strip(), p.strip()) for p in n.replace("&", ",").split(",") if p.strip()}
+    return out
+
+
+def taste_profile(c, users):
+    """genre -> weight from what everyone watched, 👍/👎 and ♥'d (movies count half)"""
+    prof = {}
+    for u in users:
+        for it in c.jellyfin.taste_items(u["Id"]):
+            ud = it.get("UserData") or {}
+            w = (3 if ud.get("IsFavorite") else 0) + {True: 2, False: -2}.get(ud.get("Likes"), 0) \
+                + (1 if ud.get("Played") or (ud.get("PlayedPercentage") or 0) > 0 or (ud.get("PlaybackPositionTicks") or 0) > 0 else 0)
+            if not w:
+                continue
+            w = w / 2 if it.get("Type") == "Movie" else w
+            for g in genres_of(it.get("Genres") or []):
+                prof[g] = prof.get(g, 0) + w
+    return prof
+
+
+def affinity(genre_names, prof):
+    gs = genres_of(genre_names)
+    return sum(prof.get(g, 0) for g in gs) / len(gs) if gs else 0.0
+
+
 def weekly_add(cfg, c, st, now, lines=None):
     lines = [] if lines is None else lines
     free = c.sonarr.free_bytes(cfg.trials_root)
@@ -131,13 +164,26 @@ def weekly_add(cfg, c, st, now, lines=None):
                   if rec.get("added_at") and parse(rec["added_at"]).strftime("%G-W%V") == week)
     target = max(0, cfg.trials_per_week - already)
     added = 0
-    for item in c.seerr.trending_tv():
-        if added >= target:
-            break
+    # candidates: trending + popular, ranked by how well they match what users watch, like and ♥
+    # (trending position breaks ties, so with no history yet it's plain trending order)
+    pool, seen = [], set()
+    for item in c.seerr.trending_tv() + c.seerr.popular_tv():
+        if item["id"] not in seen:
+            seen.add(item["id"]); pool.append(item)
+    prof = taste_profile(c, c.jellyfin.users()) if target else {}
+    ranked = []
+    for rank, item in enumerate(pool):
         det = c.seerr.tv(item["id"])
         tvdb = (det.get("externalIds") or {}).get("tvdbId")
         if not tvdb or tvdb in skip or not aired_enough(det, cfg.trial_episodes):
             continue
+        ranked.append((affinity([g["name"] for g in det.get("genres") or []], prof), rank, item, det, tvdb))
+    # half taste match, half trending position - so it stays "what's new" and not just "what's big"
+    top = max((abs(r[0]) for r in ranked), default=0) or 1
+    ranked.sort(key=lambda r: -(0.5 * r[0] / top + 0.5 * (1 - r[1] / max(len(pool), 1))))
+    for _, _, item, det, tvdb in ranked:
+        if added >= target:
+            break
         lookup = c.sonarr.lookup_tvdb(tvdb)
         if not lookup:
             continue

@@ -119,6 +119,9 @@ class FakeJellyfin:
     def user_data(self, item_id, user_id):
         return self.udata.get((item_id, user_id), {})
 
+    def taste_items(self, user_id):
+        return getattr(self, "taste", {}).get(user_id, [])
+
     def recently_played(self, user_id, limit=40):
         return self.recent.get(user_id, [])
 
@@ -174,6 +177,9 @@ class FakeSeerr:
 
     def trending_tv(self, pages=3):
         return list(self.trending)
+
+    def popular_tv(self, pages=2):
+        return list(getattr(self, "popular", []))
 
     def tv(self, tmdb):
         return self.details[tmdb]

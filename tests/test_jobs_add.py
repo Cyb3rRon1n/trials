@@ -92,3 +92,24 @@ def test_anime_destination_adds_series_as_anime_type(tmp_path):
     weekly_add(cfg, c, st, NOW)
     types = {s["title"]: s["seriesType"] for s in c.sonarr.series_db.values()}
     assert types == {"Anime One": "anime", "Plain Show": "standard"}
+
+
+def test_picks_follow_what_users_watch_like_and_favorite(tmp_path):
+    from trials.jobs import Clients, weekly_add
+    from trials import state
+    from fakes import FakeJellyfin, FakeNtfy, FakeSeerr, FakeSonarr, NOW, make_cfg
+    cfg = make_cfg(tmp_path, trials_per_week=1)
+    c = Clients(FakeSonarr(), FakeJellyfin(), FakeSeerr(), FakeNtfy())
+    c.seerr.add_show(1, 101, "Trending Sitcom", genres=("Comedy",))            # #1 trending
+    c.seerr.add_show(2, 102, "Crime Drama", genres=("Crime", "Drama"))
+    for tvdb, name in ((101, "Trending Sitcom"), (102, "Crime Drama")):
+        c.sonarr.lookups[tvdb] = {"title": name, "tvdbId": tvdb}
+    c.jellyfin.taste = {"u1": [{"Type": "Series", "Genres": ["Crime"], "UserData": {"IsFavorite": True}},
+                               {"Type": "Series", "Genres": ["Comedy"], "UserData": {"Likes": False, "Played": True}}]}
+    lines = weekly_add(cfg, c, state.empty(), NOW)
+    assert lines == ["trial added: Crime Drama (S01E01-E03) -> Trials library"]
+
+
+def test_genre_names_normalise():
+    from trials.jobs import genres_of
+    assert genres_of(["Sci-Fi & Fantasy", "Action & Adventure"]) == {"science fiction", "fantasy", "action", "adventure"}

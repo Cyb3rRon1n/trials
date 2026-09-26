@@ -175,6 +175,11 @@ class Jellyfin:
         r = self.http.call("GET", "/Items", {"Recursive": "true", "IncludeItemTypes": "Series", "Fields": "Path"})
         return {i["Path"].rstrip("/"): i for i in r["Items"] if i.get("Path")}
 
+    def taste_items(self, user_id):
+        """every show/movie with this user's data + genres (for the taste profile)"""
+        return self.http.call("GET", "/Items", {"userId": user_id, "Recursive": "true",
+                                                "IncludeItemTypes": "Series,Movie", "Fields": "Genres"})["Items"]
+
     def movie_index(self):
         """movie folder -> item (a movie's Path is its file; Radarr knows the folder)"""
         r = self.http.call("GET", "/Items", {"Recursive": "true", "IncludeItemTypes": "Movie", "Fields": "Path"})
@@ -268,6 +273,12 @@ class Seerr:
         for page in range(1, pages + 1):
             out += [r for r in self.http.call("GET", "/discover/trending", {"page": page})["results"]
                     if r.get("mediaType") == "tv"]
+        return out
+
+    def popular_tv(self, pages=2):
+        out = []
+        for page in range(1, pages + 1):
+            out += [dict(r, mediaType="tv") for r in self.http.call("GET", "/discover/tv", {"page": page})["results"]]
         return out
 
     def tv(self, tmdb):
