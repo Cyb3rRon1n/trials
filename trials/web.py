@@ -129,7 +129,7 @@ def render_page(cfg, c, user):
         if admin:
             key = html.escape(trial_key(rec))
             if rec.get("override"):
-                over = f'<br><small>Overruled by {html.escape(rec["override"]["by"])}: {rec["override"]["verdict"]} (applying)</small>'
+                over = f'<br><small>Overruled by the admins: {rec["override"]["verdict"]} (applying)</small>'
             else:
                 over = "".join(f'<form class="inline" method="post" action="/override"><input type="hidden" name="key" value="{key}">'
                                f'<input type="hidden" name="verdict" value="{v}"><button class="admin">{l}</button></form>'
@@ -152,7 +152,7 @@ def render_page(cfg, c, user):
     body = nav(cfg, user, "/") + (f'<h1>On Trial</h1><p class="lead">Hi {html.escape(user["name"])}. These are on a {cfg.window_days}-day trial: '
             f'new shows with their first {cfg.trial_episodes} episodes, and requests the admins sent here. Vote to keep or drop them - '
             'the majority of people who tried it decides. ♥ Favorite in Jellyfin counts as two 👍. If you watch but don\'t vote, finishing it counts as a keep. '
-            'adriel and bobby can overrule a result.</p>')
+            'The admins can overrule a result.</p>')
     body += "".join(cards) or '<p class="note">No shows on trial right now.</p>'
     if admin:
         rejected = [r for r in st["shows"].values() if r.get("status") == "rejected" and r.get("tvdb")]
