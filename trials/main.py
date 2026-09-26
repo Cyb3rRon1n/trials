@@ -3,14 +3,15 @@ import threading
 from datetime import datetime, timedelta, timezone
 
 from . import state as state_mod
-from .clients import Jellyfin, Ntfy, Seerr, Sonarr
+from .clients import Jellyfin, Ntfy, Radarr, Seerr, Sonarr
 from .config import Config
 from .jobs import Clients, daily_decide, iso, parse, weekly_add
 
 
 def build_clients(cfg):
     return Clients(Sonarr(cfg.sonarr_url, cfg.sonarr_key), Jellyfin(cfg.jellyfin_url, cfg.jellyfin_key),
-                   Seerr(cfg.seerr_url, cfg.seerr_key), Ntfy(cfg.ntfy_url, cfg.ntfy_topic))
+                   Seerr(cfg.seerr_url, cfg.seerr_key), Ntfy(cfg.ntfy_url, cfg.ntfy_topic),
+                   Radarr(cfg.radarr_url, cfg.radarr_key) if cfg.radarr_url and cfg.radarr_key else None)
 
 
 def _blocked(st, name, now):
@@ -71,6 +72,10 @@ def probe(cfg, c):
     print(f"free at {cfg.trials_root}: {c.sonarr.free_bytes(cfg.trials_root) / 1e12:.2f} TB")
     print("jellyfin users:", [u["Name"] for u in c.jellyfin.users()])
     print("jellyfin series indexed:", len(c.jellyfin.series_index()))
+    if c.radarr:
+        print("radarr movies:", len(c.radarr.movies()), "| trials movies root:", cfg.trials_movies_root)
+    else:
+        print("radarr: not configured - movie request trials disabled")
     trending = c.seerr.trending_tv(pages=1)[:5]
     for t in trending:
         d = c.seerr.tv(t["id"])
@@ -93,4 +98,6 @@ def main(argv=None):
     stop = threading.Event()
     threading.Thread(target=scheduler, args=(cfg, c, stop), daemon=True).start()
     print(f"trials serving on :{cfg.port} (enforce={cfg.enforce})", flush=True)
-    make_server(cfg, c).serve_forever()
+    def override_now():   # an admin overruled a vote: apply it now, not at tomorrow's 11:00 run
+        threading.Thread(target=run_job, args=("decide", cfg, c, datetime.now(timezone.utc)), daemon=True).start()
+    make_server(cfg, c, on_override=override_now).serve_forever()
