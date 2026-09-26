@@ -41,6 +41,22 @@ def test_window_starts_when_all_trial_eps_arrive(tmp_path):
     assert rec["window_start"] == iso(NOW) and "voting open" in lines[0]
 
 
+def test_missing_trial_eps_are_searched_again_daily(tmp_path):
+    # the setup search is one-shot and old episodes never reappear in RSS: a missed search
+    # would otherwise leave the trial to die as "unavailable" with releases sitting there
+    cfg, c, st, rec, sid = world(tmp_path, added_days_ago=1)
+    daily_decide(cfg, c, st, NOW)
+    c.sonarr.eps[sid][0]["hasFile"] = True
+    c.sonarr.calls.clear()
+    daily_decide(cfg, c, st, NOW)
+    missing = tuple(e["id"] for e in c.sonarr.eps[sid][1:3])
+    assert ("search", missing) in c.sonarr.calls
+    arrive(c, sid)
+    c.sonarr.calls.clear()
+    daily_decide(cfg, c, st, NOW)
+    assert not [x for x in c.sonarr.calls if x[0] == "search"]
+
+
 def test_unavailable_after_arrival_days_is_deleted_without_exclusion(tmp_path):
     cfg, c, st, rec, sid = world(tmp_path)
     daily_decide(cfg, c, st, NOW)          # added 30 days ago, never arrived
