@@ -135,3 +135,20 @@ def test_movie_favorite_outvotes_two_thumbs_down(tmp_path):
     c.jellyfin.like[("m1", "u3")] = False
     lines = daily_decide(cfg, c, st, NOW + timedelta(days=22))
     assert any("KEPT Loved Film (2026) (2 like / 2 dislike)" in l for l in lines)
+
+
+def test_kept_title_keeps_likes_favorites_play_count_and_date(tmp_path):
+    cfg, c, st = world(tmp_path)
+    c.radarr.add(40, 555, "Good Film", f"{cfg.trials_movies_root}/Good Film (2026)")
+    daily_decide(cfg, c, st, NOW)
+    c.jellyfin.movies = {f"{cfg.trials_movies_root}/Good Film (2026)": {"Id": "m1"}}
+    daily_decide(cfg, c, st, NOW)
+    c.jellyfin.udata[("m1", "u1")] = {"Played": True, "PlayCount": 2, "LastPlayedDate": "2026-10-01T20:00:00Z", "IsFavorite": True}
+    c.jellyfin.like[("m1", "u2")] = True
+    daily_decide(cfg, c, st, NOW + timedelta(days=22))
+    c.jellyfin.movies = {f"{cfg.movies_root}/Good Film (2026)": {"Id": "m9"}}
+    daily_decide(cfg, c, st, NOW + timedelta(days=23))
+    assert ("m9", "u1", True, 0, 2, "2026-10-01T20:00:00Z") in c.jellyfin.restored     # count + date back
+    assert ("fav", "m9", "u1", True) in c.jellyfin.calls                                  # ♥ back
+    assert ("like", "m9", "u2", True) in c.jellyfin.calls                                 # 👍 back
+    assert st["shows"]["movie:555"]["status"] == "kept" and st["shows"]["movie:555"]["taste"] is None

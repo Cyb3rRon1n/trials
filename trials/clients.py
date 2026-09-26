@@ -217,6 +217,18 @@ class Jellyfin:
         self.http.call("POST", f"/UserItems/{item_id}/UserData", {"userId": user_id},
                        body={"PlaybackPositionTicks": ticks})
 
+    def restore_played(self, item_id, user_id, played, ticks, count=0, date=None):
+        """put back watched status, resume point, play count and last-played date in one go"""
+        body = {"Played": played, "PlaybackPositionTicks": ticks}
+        if count:
+            body["PlayCount"] = count
+        if date:
+            body["LastPlayedDate"] = date
+        self.http.call("POST", f"/UserItems/{item_id}/UserData", {"userId": user_id}, body=body)
+
+    def set_favorite(self, item_id, user_id, fav):
+        self.http.call("POST" if fav else "DELETE", f"/UserFavoriteItems/{item_id}", {"userId": user_id})
+
     def set_trial_note(self, item_id, user_id, note):
         """Put `note` at the top of the item's overview (locked so metadata refreshes keep it); None removes it."""
         item = self.http.call("GET", f"/Items/{item_id}", {"userId": user_id})

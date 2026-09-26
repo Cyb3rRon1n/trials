@@ -132,6 +132,13 @@ class FakeJellyfin:
         self.like[(item_id, user_id)] = likes
         self.calls.append(("like", item_id, user_id, likes))
 
+    def restore_played(self, item_id, user_id, played, ticks, count=0, date=None):
+        self.calls.append(("played", item_id, user_id) if played else ("pos", item_id, user_id, ticks))
+        self.restored = getattr(self, "restored", []) + [(item_id, user_id, played, ticks, count, date)]
+
+    def set_favorite(self, item_id, user_id, fav):
+        self.calls.append(("fav", item_id, user_id, fav))
+
     def mark_played(self, item_id, user_id):
         self.calls.append(("played", item_id, user_id))
 

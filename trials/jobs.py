@@ -191,6 +191,17 @@ def _finish_keep_steps(c, rec, tag):
         rec["untagged"] = True
 
 
+def _hist(d):
+    return {"played": bool(d.get("Played")), "ticks": int(d.get("PlaybackPositionTicks") or 0),
+            "count": int(d.get("PlayCount") or 0), "date": d.get("LastPlayedDate")}
+
+
+def _taste(users, views):
+    """each user's 👍/👎 and ♥ on the show/movie itself, so a kept title keeps them"""
+    return {u["Id"]: {"likes": v.likes, "fav": v.favorite} for u, v in zip(users, views)
+            if v.likes is not None or v.favorite}
+
+
 def request_views(c, jf_id, users, n):
     """whole-request show: any episode counts; no vote + finished min(n, available) episodes = keep"""
     views, snapshot, total = [], {}, 0
@@ -201,9 +212,7 @@ def request_views(c, jf_id, users, n):
         watched = sum(1 for _, d in data if d.get("Played") or (d.get("PlaybackPositionTicks") or 0) > 0)
         finished = sum(1 for _, d in data if d.get("Played"))
         views.append(UserView(c.jellyfin.likes(jf_id, u["Id"]), watched, finished, c.jellyfin.favorite(jf_id, u["Id"])))
-        snapshot[u["Id"]] = {ep_key(e.get("ParentIndexNumber") or 0, e["IndexNumber"]):
-                             {"played": bool(d.get("Played")), "ticks": int(d.get("PlaybackPositionTicks") or 0)}
-                             for e, d in data}
+        snapshot[u["Id"]] = {ep_key(e.get("ParentIndexNumber") or 0, e["IndexNumber"]): _hist(d) for e, d in data}
     return views, snapshot, max(1, min(n, total))
 
 
@@ -214,7 +223,7 @@ def movie_views(c, jf_id, users):
         d = c.jellyfin.user_data(jf_id, u["Id"])
         played, ticks = bool(d.get("Played")), int(d.get("PlaybackPositionTicks") or 0)
         views.append(UserView(c.jellyfin.likes(jf_id, u["Id"]), int(played or ticks > 0), int(played), bool(d.get("IsFavorite"))))
-        snapshot[u["Id"]] = {"movie": {"played": played, "ticks": ticks}}
+        snapshot[u["Id"]] = {"movie": _hist(d)}
     return views, snapshot
 
 
@@ -226,9 +235,7 @@ def user_views(c, jf_id, users, n):
         watched = sum(1 for _, d in data if d.get("Played") or (d.get("PlaybackPositionTicks") or 0) > 0)
         finished = sum(1 for _, d in data if d.get("Played"))
         views.append(UserView(c.jellyfin.likes(jf_id, u["Id"]), watched, finished, c.jellyfin.favorite(jf_id, u["Id"])))
-        snapshot[u["Id"]] = {ep_key(1, e["IndexNumber"]): {"played": bool(d.get("Played")),
-                                                            "ticks": int(d.get("PlaybackPositionTicks") or 0)}
-                             for e, d in data}
+        snapshot[u["Id"]] = {ep_key(1, e["IndexNumber"]): _hist(d) for e, d in data}
     return views, snapshot
 
 
@@ -250,16 +257,18 @@ def finish_move(c, rec, index, users, now):
                          for e in c.jellyfin.all_episodes(jf["Id"], users[0]["Id"]) if e.get("IndexNumber")}
         if needed - set(new_items) and age < GIVE_UP:
             return []
-        for user_id, item_id, played, ticks in restore_plan(snap, new_items):
-            if played:
-                c.jellyfin.mark_played(item_id, user_id)
-            else:
-                c.jellyfin.set_position(item_id, user_id, ticks)
+        for user_id, item_id, played, ticks, count, date in restore_plan(snap, new_items):
+            c.jellyfin.restore_played(item_id, user_id, played, ticks, count, date)
+        for user_id, t in (rec.get("taste") or {}).items():
+            if t.get("likes") is not None:
+                c.jellyfin.set_like(jf["Id"], user_id, t["likes"])
+            if t.get("fav"):
+                c.jellyfin.set_favorite(jf["Id"], user_id, True)
         missing = sorted(needed - set(new_items))
     else:
         new_items = {}
         missing = sorted(needed)
-    rec.update(status="kept", played=None)
+    rec.update(status="kept", played=None, taste=None)
     if missing:
         return [f"{rec['title']}: kept, watched marks restored except {missing} (not found in Jellyfin after 7 days)"]
     return [f"{rec['title']}: now in its permanent library, watched marks restored"]
@@ -269,11 +278,12 @@ def apply_keep(cfg, c, rec, s, tag, index, users, now, why):
     jf = index.get(s["path"].rstrip("/"))
     if jf:
         if is_movie(rec):
-            _, rec["played"] = movie_views(c, jf["Id"], users)
+            views, rec["played"] = movie_views(c, jf["Id"], users)
         elif is_request(rec):
-            _, rec["played"], _ = request_views(c, jf["Id"], users, cfg.trial_episodes)
+            views, rec["played"], _ = request_views(c, jf["Id"], users, cfg.trial_episodes)
         else:
-            _, rec["played"] = user_views(c, jf["Id"], users, cfg.trial_episodes)
+            views, rec["played"] = user_views(c, jf["Id"], users, cfg.trial_episodes)
+        rec["taste"] = _taste(users, views)
         if rec.get("noted") and users:
             try:  # cosmetic; the move normally gives Jellyfin a fresh item anyway
                 c.jellyfin.set_trial_note(jf["Id"], users[0]["Id"], None)
