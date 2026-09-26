@@ -35,7 +35,7 @@ class Config:
     # request trials: Seerr approvers pick these roots; movie trials need Radarr
     radarr_url: str = ""
     radarr_key: str = ""
-    trials_movies_root: str = "/data/media/trials-movies"
+    trials_movies_root: str = "/data/media/trials"   # movies share the trials folder: one mixed "On Trial" library
     movies_root: str = "/data/media/movies"
     admins: str = "adriel,bobby"          # Jellyfin usernames who can override a vote
     backups_dir: str = "/backups"         # userdata-export snapshots (read-only mount)

@@ -120,7 +120,7 @@ def test_admin_override_records_and_triggers_a_run(tmp_path):
         assert req(port, "POST", "/override", {"key": "1005", "verdict": "drop"}, login(port, "bobby"))[0] == 303
         assert state.load(cfg.state_path)["shows"]["1005"]["override"]["by"] == "bobby" and ran == [1]
         page = req(port, "GET", "/", cookie=login(port, "adriel"))[2]
-        assert "Overruled by bobby" in page and "Admin: keep" not in page
+        assert "Overruled by the admins" in page and "bobby" not in page.split("Overruled")[1][:40] and "Admin: keep" not in page
         assert "Admin: keep" not in req(port, "GET", "/", cookie=login(port, "palma"))[2]
     finally:
         srv.shutdown()
