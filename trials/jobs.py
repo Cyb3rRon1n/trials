@@ -238,8 +238,9 @@ def daily_decide(cfg, c, st, now, lines=None):
             lines.append(f"{rec['title']}: no longer a trial in Sonarr (tag removed or series deleted) - left alone")
             continue
         eps = c.sonarr.episodes(s["id"])
+        just_searched = False
         if not rec.get("setup_done"):
-            setup_trial(c, rec, eps, n)
+            just_searched = setup_trial(c, rec, eps, n)
             eps = c.sonarr.episodes(s["id"])
         if c.seerr.requested_since(rec["tmdb"], rec["added_at"]) or user_extended(rec, eps, n):
             keeps.append((rec, s, "requested by a user"))
@@ -255,6 +256,10 @@ def daily_decide(cfg, c, st, now, lines=None):
                 lines.append(f"{rec['title']}: files present but Jellyfin hasn't indexed {s['path']} yet - waiting")
             elif now - parse(rec["added_at"]) > timedelta(days=cfg.arrival_days):
                 drops.append((rec, s, "unavailable"))
+            elif not just_searched:
+                # the setup search is one-shot and aired episodes never come back via RSS,
+                # so retry the missing ones daily until they arrive or arrival_days runs out
+                c.sonarr.search_episodes([e["id"] for e in t if not e["hasFile"]])
             continue
         if now < parse(rec["window_start"]) + timedelta(days=cfg.window_days):
             if s["path"].rstrip("/") in index:
