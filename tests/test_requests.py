@@ -121,3 +121,17 @@ def test_kept_movie_gets_watched_status_back_after_the_move(tmp_path):
     lines = daily_decide(cfg, c, st, NOW + timedelta(days=23))
     assert ("played", "m9", "u1") in c.jellyfin.calls and ("pos", "m9", "u2", 900) in c.jellyfin.calls
     assert rec["status"] == "kept" and any("watched marks restored" in l for l in lines)
+
+
+def test_movie_favorite_outvotes_two_thumbs_down(tmp_path):
+    cfg, c, st = world(tmp_path)
+    c.jellyfin.users_list.append({"Id": "u3", "Name": "palma"})
+    c.radarr.add(40, 555, "Loved Film", f"{cfg.trials_movies_root}/Loved Film (2026)")
+    daily_decide(cfg, c, st, NOW)
+    c.jellyfin.movies = {f"{cfg.trials_movies_root}/Loved Film (2026)": {"Id": "m1"}}
+    daily_decide(cfg, c, st, NOW)
+    c.jellyfin.udata[("m1", "u1")] = {"IsFavorite": True}
+    c.jellyfin.like[("m1", "u2")] = False
+    c.jellyfin.like[("m1", "u3")] = False
+    lines = daily_decide(cfg, c, st, NOW + timedelta(days=22))
+    assert any("KEPT Loved Film (2026) (2 like / 2 dislike)" in l for l in lines)

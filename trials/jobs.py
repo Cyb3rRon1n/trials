@@ -200,7 +200,7 @@ def request_views(c, jf_id, users, n):
         data = [(e, e.get("UserData") or {}) for e in eps]
         watched = sum(1 for _, d in data if d.get("Played") or (d.get("PlaybackPositionTicks") or 0) > 0)
         finished = sum(1 for _, d in data if d.get("Played"))
-        views.append(UserView(c.jellyfin.likes(jf_id, u["Id"]), watched, finished))
+        views.append(UserView(c.jellyfin.likes(jf_id, u["Id"]), watched, finished, c.jellyfin.favorite(jf_id, u["Id"])))
         snapshot[u["Id"]] = {ep_key(e.get("ParentIndexNumber") or 0, e["IndexNumber"]):
                              {"played": bool(d.get("Played")), "ticks": int(d.get("PlaybackPositionTicks") or 0)}
                              for e, d in data}
@@ -213,7 +213,7 @@ def movie_views(c, jf_id, users):
     for u in users:
         d = c.jellyfin.user_data(jf_id, u["Id"])
         played, ticks = bool(d.get("Played")), int(d.get("PlaybackPositionTicks") or 0)
-        views.append(UserView(c.jellyfin.likes(jf_id, u["Id"]), int(played or ticks > 0), int(played)))
+        views.append(UserView(c.jellyfin.likes(jf_id, u["Id"]), int(played or ticks > 0), int(played), bool(d.get("IsFavorite"))))
         snapshot[u["Id"]] = {"movie": {"played": played, "ticks": ticks}}
     return views, snapshot
 
@@ -225,7 +225,7 @@ def user_views(c, jf_id, users, n):
         data = [(e, e.get("UserData") or {}) for e in eps]
         watched = sum(1 for _, d in data if d.get("Played") or (d.get("PlaybackPositionTicks") or 0) > 0)
         finished = sum(1 for _, d in data if d.get("Played"))
-        views.append(UserView(c.jellyfin.likes(jf_id, u["Id"]), watched, finished))
+        views.append(UserView(c.jellyfin.likes(jf_id, u["Id"]), watched, finished, c.jellyfin.favorite(jf_id, u["Id"])))
         snapshot[u["Id"]] = {ep_key(1, e["IndexNumber"]): {"played": bool(d.get("Played")),
                                                             "ticks": int(d.get("PlaybackPositionTicks") or 0)}
                              for e, d in data}

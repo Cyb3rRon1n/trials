@@ -125,6 +125,9 @@ class FakeJellyfin:
     def likes(self, item_id, user_id):
         return self.like.get((item_id, user_id))
 
+    def favorite(self, item_id, user_id):
+        return bool(self.udata.get((item_id, user_id), {}).get("IsFavorite"))
+
     def set_like(self, item_id, user_id, likes):
         self.like[(item_id, user_id)] = likes
         self.calls.append(("like", item_id, user_id, likes))
