@@ -200,6 +200,9 @@ class Jellyfin:
     def likes(self, item_id, user_id):
         return (self.http.call("GET", f"/Items/{item_id}", {"userId": user_id}).get("UserData") or {}).get("Likes")
 
+    def favorite(self, item_id, user_id):
+        return bool(self.user_data(item_id, user_id).get("IsFavorite"))
+
     def set_like(self, item_id, user_id, likes):
         if likes is None:
             self.http.call("DELETE", f"/UserItems/{item_id}/Rating", {"userId": user_id})
