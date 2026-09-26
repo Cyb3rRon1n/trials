@@ -74,8 +74,8 @@ def test_vote_rejects_non_trial_item(app):
 
 def test_unreject_admin_only(app):
     cfg, c, port = app
-    assert req(port, "POST", "/unreject", {"tvdb": "2002"}, login(port, "bobby"))[0] == 403
-    assert req(port, "POST", "/unreject", {"tvdb": "2002"}, login(port, "adriel"))[0] == 303
+    assert req(port, "POST", "/unreject", {"tvdb": "2002"}, login(port, "palma"))[0] == 403
+    assert req(port, "POST", "/unreject", {"tvdb": "2002"}, login(port, "bobby"))[0] == 303
     st = state.load(cfg.state_path)
     assert st["rejected"] == [] and "2002" not in st["shows"]
 
@@ -103,3 +103,50 @@ def test_logout_invalidates_session(app):
     assert req(port, "POST", "/logout", cookie=cookie)[0] == 303
     status, _, body = req(port, "GET", "/", cookie=cookie)
     assert status == 200 and 'name="password"' in body
+
+
+def test_admin_override_records_and_triggers_a_run(tmp_path):
+    cfg = make_cfg(tmp_path)
+    c = Clients(FakeSonarr(), FakeJellyfin(), FakeSeerr(), FakeNtfy())
+    st = state.empty()
+    st["shows"]["1005"] = {"tvdb": 1005, "title": "Plain Show", "path": "/data/media/trials/Plain Show", "status": "active"}
+    state.save(cfg.state_path, st)
+    ran = []
+    srv = make_server(cfg, c, "127.0.0.1", 0, on_override=lambda: ran.append(1))
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    port = srv.server_address[1]
+    try:
+        assert req(port, "POST", "/override", {"key": "1005", "verdict": "drop"}, login(port, "palma"))[0] == 403
+        assert req(port, "POST", "/override", {"key": "1005", "verdict": "drop"}, login(port, "bobby"))[0] == 303
+        assert state.load(cfg.state_path)["shows"]["1005"]["override"]["by"] == "bobby" and ran == [1]
+        page = req(port, "GET", "/", cookie=login(port, "adriel"))[2]
+        assert "Overruled by bobby" in page and "Admin: keep" not in page
+        assert "Admin: keep" not in req(port, "GET", "/", cookie=login(port, "palma"))[2]
+    finally:
+        srv.shutdown()
+
+
+def test_rate_page_only_accepts_recently_watched(app):
+    cfg, c, port = app
+    c.jellyfin.recent["u3"] = [{"Type": "Episode", "Id": "ep9", "SeriesId": "s1", "SeriesName": "Some Show"},
+                               {"Type": "Movie", "Id": "mv1", "Name": "Some Film", "ProductionYear": 2025}]
+    cookie = login(port, "palma")
+    page = req(port, "GET", "/rate", cookie=cookie)[2]
+    assert "Some Show" in page and "Some Film (2025)" in page and "Download user backup" not in page
+    assert req(port, "POST", "/rate", {"item": "s1", "value": "up"}, cookie)[0] == 303
+    assert c.jellyfin.like[("s1", "u3")] is True
+    assert req(port, "POST", "/rate", {"item": "someone-elses", "value": "up"}, cookie)[0] == 400
+
+
+def test_backup_download_admins_only(app, tmp_path):
+    cfg, c, port = app
+    snap = tmp_path / "bk" / "2026-09-26" / "users"
+    snap.mkdir(parents=True)
+    (snap / "palma.json").write_text("{}")
+    object.__setattr__(cfg, "backups_dir", str(tmp_path / "bk"))
+    assert req(port, "GET", "/admin/backup.zip", cookie=login(port, "palma"))[0] == 403
+    conn = http.client.HTTPConnection("127.0.0.1", port)
+    conn.request("GET", "/admin/backup.zip", headers={"Cookie": login(port, "adriel")})
+    r = conn.getresponse()
+    body = r.read()
+    assert r.status == 200 and body[:2] == b"PK" and "userdata-2026-09-26.zip" in r.getheader("Content-Disposition")
