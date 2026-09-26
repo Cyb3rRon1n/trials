@@ -124,6 +124,45 @@ class Sonarr:
                        {"deleteFiles": "true", "addImportListExclusion": "true" if exclude else "false"})
 
 
+class Radarr:
+    def __init__(self, url, key, transport=urllib_transport):
+        self.http = Http(url.rstrip("/") + "/api/v3", {"X-Api-Key": key}, transport)
+
+    def tag_id(self, label):
+        for t in self.http.call("GET", "/tag"):
+            if t["label"] == label:
+                return t["id"]
+        return self.http.call("POST", "/tag", body={"label": label})["id"]
+
+    def movies(self):
+        return self.http.call("GET", "/movie")
+
+    def get_movie(self, mid):
+        return self.http.call("GET", f"/movie/{mid}")
+
+    def add_tag(self, mid, tag_id):
+        m = self.get_movie(mid)
+        if tag_id not in m["tags"]:
+            m["tags"].append(tag_id)
+            self.http.call("PUT", f"/movie/{mid}", body=m)
+
+    def remove_tag(self, mid, tag_id):
+        m = self.get_movie(mid)
+        m["tags"] = [t for t in m["tags"] if t != tag_id]
+        self.http.call("PUT", f"/movie/{mid}", body=m)
+
+    def move_movie(self, mid, root):
+        m = self.get_movie(mid)
+        m["rootFolderPath"] = root
+        m["path"] = root.rstrip("/") + "/" + m["path"].rstrip("/").rsplit("/", 1)[-1]
+        self.http.call("PUT", f"/movie/{mid}", {"moveFiles": "true"}, body=m)
+        return m["path"]
+
+    def delete_movie(self, mid, exclude):
+        self.http.call("DELETE", f"/movie/{mid}",
+                       {"deleteFiles": "true", "addImportExclusion": "true" if exclude else "false"})
+
+
 class Jellyfin:
     def __init__(self, url, key, transport=urllib_transport):
         self.http = Http(url, {"Authorization": f'MediaBrowser Token="{key}"'}, transport)
@@ -136,12 +175,33 @@ class Jellyfin:
         r = self.http.call("GET", "/Items", {"Recursive": "true", "IncludeItemTypes": "Series", "Fields": "Path"})
         return {i["Path"].rstrip("/"): i for i in r["Items"] if i.get("Path")}
 
+    def movie_index(self):
+        """movie folder -> item (a movie's Path is its file; Radarr knows the folder)"""
+        r = self.http.call("GET", "/Items", {"Recursive": "true", "IncludeItemTypes": "Movie", "Fields": "Path"})
+        return {i["Path"].rsplit("/", 1)[0]: i for i in r["Items"] if i.get("Path")}
+
+    def all_episodes(self, series_id, user_id):
+        return self.http.call("GET", f"/Shows/{series_id}/Episodes", {"userId": user_id, "IsMissing": "false"})["Items"]
+
+    def user_data(self, item_id, user_id):
+        return self.http.call("GET", f"/Items/{item_id}", {"userId": user_id}).get("UserData") or {}
+
+    def recently_played(self, user_id, limit=40):
+        """the user's latest watched movies and episodes, newest first"""
+        return self.http.call("GET", "/Items", {"userId": user_id, "Recursive": "true", "Filters": "IsPlayed",
+                                                "IncludeItemTypes": "Movie,Episode", "SortBy": "DatePlayed",
+                                                "SortOrder": "Descending", "Limit": limit,
+                                                "Fields": "SeriesId,SeriesName,ProductionYear"})["Items"]
+
     def season1_episodes(self, series_id, user_id):
         return self.http.call("GET", f"/Shows/{series_id}/Episodes",
                               {"userId": user_id, "season": 1, "IsMissing": "false"})["Items"]
 
     def likes(self, item_id, user_id):
         return (self.http.call("GET", f"/Items/{item_id}", {"userId": user_id}).get("UserData") or {}).get("Likes")
+
+    def favorite(self, item_id, user_id):
+        return bool(self.user_data(item_id, user_id).get("IsFavorite"))
 
     def set_like(self, item_id, user_id, likes):
         if likes is None:

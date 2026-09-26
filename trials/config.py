@@ -32,6 +32,17 @@ class Config:
     drama_root: str = "/data/media/drama"
     state_path: str = "/data/state.json"
     port: int = 8080
+    # request trials: Seerr approvers pick these roots; movie trials need Radarr
+    radarr_url: str = ""
+    radarr_key: str = ""
+    trials_movies_root: str = "/data/media/trials-movies"
+    movies_root: str = "/data/media/movies"
+    admins: str = "adriel,bobby"          # Jellyfin usernames who can override a vote
+    backups_dir: str = "/backups"         # userdata-export snapshots (read-only mount)
+
+    def is_admin(self, user):
+        names = {n.strip().lower() for n in self.admins.split(",") if n.strip()}
+        return bool(user.get("admin")) or user.get("name", "").lower() in names
 
     @classmethod
     def from_env(cls, env=None):

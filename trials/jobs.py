@@ -15,6 +15,56 @@ class Clients:
     jellyfin: object
     seerr: object
     ntfy: object
+    radarr: object = None      # movie request trials; None = shows only
+
+
+def _in(root, path):
+    root = root.rstrip("/")
+    return (path or "").rstrip("/").startswith(root + "/")
+
+
+def is_request(rec):
+    return rec.get("kind") == "request"
+
+
+def is_movie(rec):
+    return rec.get("media") == "movie"
+
+
+def adopt_requests(cfg, c, st, now, lines=None):
+    """A request an admin approved into the Trials folder becomes a trial of the WHOLE request.
+    Only things sitting in the trials roots are adopted - nothing else is ever judged."""
+    lines = [] if lines is None else lines
+    live = ("active", "moving")
+    tag = c.sonarr.tag_id(TAG)
+    for s in c.sonarr.series():
+        key = str(s.get("tvdbId"))
+        if not _in(cfg.trials_root, s.get("path")) or st["shows"].get(key, {}).get("status") in live:
+            continue
+        det = c.seerr.tv(s["tmdbId"]) if s.get("tmdbId") else {}
+        dest = choose_destination([g["name"] for g in det.get("genres") or []], det.get("originCountry") or [],
+                                  cfg.tv_root, cfg.anime_root, cfg.drama_root)
+        if tag not in s.get("tags", []):
+            c.sonarr.add_tag(s["id"], tag)
+        st["shows"][key] = {"tvdb": s["tvdbId"], "tmdb": s.get("tmdbId"), "title": s["title"], "sonarr_id": s["id"],
+                            "path": s["path"], "added_at": iso(now), "window_start": None, "status": "active",
+                            "dest": dest, "played": None, "setup_done": True, "dry_run": None,
+                            "kind": "request", "media": "tv"}
+        lines.append(f"request trial: {s['title']} (whole request) -> Trials library")
+    if c.radarr is None:
+        return lines
+    mtag = c.radarr.tag_id(TAG)
+    for m in c.radarr.movies():
+        key = f"movie:{m.get('tmdbId')}"
+        if not _in(cfg.trials_movies_root, m.get("path")) or st["shows"].get(key, {}).get("status") in live:
+            continue
+        if mtag not in m.get("tags", []):
+            c.radarr.add_tag(m["id"], mtag)
+        st["shows"][key] = {"tmdb": m.get("tmdbId"), "title": f"{m['title']} ({m.get('year')})", "radarr_id": m["id"],
+                            "path": m["path"], "added_at": iso(now), "window_start": None, "status": "active",
+                            "dest": cfg.movies_root, "played": None, "dry_run": None, "kind": "request", "media": "movie"}
+        lines.append(f"request trial: {m['title']} (movie) -> Trials movies library")
+    return lines
 
 
 def iso(dt):
@@ -127,12 +177,45 @@ def user_extended(rec, episodes, n):
 
 
 def _finish_keep_steps(c, rec, tag):
+    if is_movie(rec):
+        if not rec.get("untagged"):
+            c.radarr.remove_tag(rec["radarr_id"], c.radarr.tag_id(TAG))
+            rec["untagged"] = True
+        return
     if not rec.get("completed"):
-        c.sonarr.monitor_all_and_search(rec["sonarr_id"])
+        if not is_request(rec):   # a request already monitors exactly what was asked for
+            c.sonarr.monitor_all_and_search(rec["sonarr_id"])
         rec["completed"] = True
     if not rec.get("untagged"):
         c.sonarr.remove_tag(rec["sonarr_id"], tag)
         rec["untagged"] = True
+
+
+def request_views(c, jf_id, users, n):
+    """whole-request show: any episode counts; no vote + finished min(n, available) episodes = keep"""
+    views, snapshot, total = [], {}, 0
+    for u in users:
+        eps = [e for e in c.jellyfin.all_episodes(jf_id, u["Id"]) if e.get("IndexNumber") is not None]
+        total = max(total, len(eps))
+        data = [(e, e.get("UserData") or {}) for e in eps]
+        watched = sum(1 for _, d in data if d.get("Played") or (d.get("PlaybackPositionTicks") or 0) > 0)
+        finished = sum(1 for _, d in data if d.get("Played"))
+        views.append(UserView(c.jellyfin.likes(jf_id, u["Id"]), watched, finished, c.jellyfin.favorite(jf_id, u["Id"])))
+        snapshot[u["Id"]] = {ep_key(e.get("ParentIndexNumber") or 0, e["IndexNumber"]):
+                             {"played": bool(d.get("Played")), "ticks": int(d.get("PlaybackPositionTicks") or 0)}
+                             for e, d in data}
+    return views, snapshot, max(1, min(n, total))
+
+
+def movie_views(c, jf_id, users):
+    """no vote: watched to the end = keep, started but abandoned = drop"""
+    views, snapshot = [], {}
+    for u in users:
+        d = c.jellyfin.user_data(jf_id, u["Id"])
+        played, ticks = bool(d.get("Played")), int(d.get("PlaybackPositionTicks") or 0)
+        views.append(UserView(c.jellyfin.likes(jf_id, u["Id"]), int(played or ticks > 0), int(played), bool(d.get("IsFavorite"))))
+        snapshot[u["Id"]] = {"movie": {"played": played, "ticks": ticks}}
+    return views, snapshot
 
 
 def user_views(c, jf_id, users, n):
@@ -142,7 +225,7 @@ def user_views(c, jf_id, users, n):
         data = [(e, e.get("UserData") or {}) for e in eps]
         watched = sum(1 for _, d in data if d.get("Played") or (d.get("PlaybackPositionTicks") or 0) > 0)
         finished = sum(1 for _, d in data if d.get("Played"))
-        views.append(UserView(c.jellyfin.likes(jf_id, u["Id"]), watched, finished))
+        views.append(UserView(c.jellyfin.likes(jf_id, u["Id"]), watched, finished, c.jellyfin.favorite(jf_id, u["Id"])))
         snapshot[u["Id"]] = {ep_key(1, e["IndexNumber"]): {"played": bool(d.get("Played")),
                                                             "ticks": int(d.get("PlaybackPositionTicks") or 0)}
                              for e, d in data}
@@ -153,15 +236,18 @@ def finish_move(c, rec, index, users, now):
     snap = rec.get("played") or {}
     needed = {k for eps in snap.values() for k in eps}
     age = now - parse(rec["moved_at"])
-    jf = index.get(rec["new_path"].rstrip("/"))
+    jf = (c.jellyfin.movie_index() if is_movie(rec) else index).get(rec["new_path"].rstrip("/"))
     if not jf:
         if age < GIVE_UP:
             return []
         rec.update(status="kept", played=None)
         return [f"{rec['title']}: kept, but Jellyfin never showed its new location after 7 days - watched marks NOT restored"]
     if users:
-        new_items = {ep_key(1, e["IndexNumber"]): e["Id"]
-                     for e in c.jellyfin.season1_episodes(jf["Id"], users[0]["Id"]) if e.get("IndexNumber")}
+        if is_movie(rec):
+            new_items = {"movie": jf["Id"]}
+        else:
+            new_items = {ep_key(e.get("ParentIndexNumber") or 0, e["IndexNumber"]): e["Id"]
+                         for e in c.jellyfin.all_episodes(jf["Id"], users[0]["Id"]) if e.get("IndexNumber")}
         if needed - set(new_items) and age < GIVE_UP:
             return []
         for user_id, item_id, played, ticks in restore_plan(snap, new_items):
@@ -182,7 +268,12 @@ def finish_move(c, rec, index, users, now):
 def apply_keep(cfg, c, rec, s, tag, index, users, now, why):
     jf = index.get(s["path"].rstrip("/"))
     if jf:
-        _, rec["played"] = user_views(c, jf["Id"], users, cfg.trial_episodes)
+        if is_movie(rec):
+            _, rec["played"] = movie_views(c, jf["Id"], users)
+        elif is_request(rec):
+            _, rec["played"], _ = request_views(c, jf["Id"], users, cfg.trial_episodes)
+        else:
+            _, rec["played"] = user_views(c, jf["Id"], users, cfg.trial_episodes)
         if rec.get("noted") and users:
             try:  # cosmetic; the move normally gives Jellyfin a fresh item anyway
                 c.jellyfin.set_trial_note(jf["Id"], users[0]["Id"], None)
@@ -190,16 +281,21 @@ def apply_keep(cfg, c, rec, s, tag, index, users, now, why):
             except Exception:
                 pass
     old = s["path"]
-    new = c.sonarr.move_series(s["id"], rec["dest"])
+    new = c.radarr.move_movie(s["id"], rec["dest"]) if is_movie(rec) else c.sonarr.move_series(s["id"], rec["dest"])
     rec.update(status="moving", new_path=new, moved_at=iso(now), completed=False, untagged=False)
     _finish_keep_steps(c, rec, tag)
-    msg = f"KEPT {rec['title']} ({why}) -> {new}; downloading the rest"
+    msg = f"KEPT {rec['title']} ({why}) -> {new}" + ("" if is_movie(rec) or is_request(rec) else "; downloading the rest")
     msg += _notify_jellyfin(c, created=[new], deleted=[old])
     return msg
 
 
 def apply_drop(c, st, rec, s, why, now):
     unavailable = why == "unavailable"
+    if is_movie(rec):
+        c.radarr.delete_movie(s["id"], exclude=True)
+        rec["status"] = "rejected"
+        st.setdefault("rejected_movies", []).append(rec["tmdb"])
+        return f"REJECTED {rec['title']} ({why}) - deleted" + _notify_jellyfin(c, deleted=[s["path"]])
     c.sonarr.delete_series(s["id"], exclude=not unavailable)
     if unavailable:
         rec.update(status="unavailable", dropped_at=iso(now))
@@ -212,15 +308,86 @@ def apply_drop(c, st, rec, s, why, now):
     return msg
 
 
+def _open_window(cfg, c, rec, jf_id, users, now, lines, why="arrived"):
+    rec["window_start"] = iso(now)
+    lines.append(f"{rec['title']}: {why} - voting open for {cfg.window_days} days")
+    _mark_on_trial(cfg, c, rec, jf_id, users, lines)
+
+
+def _request_arrival(cfg, c, rec, s, eps, index, users, now, lines):
+    """a whole request opens for voting once every aired, monitored episode is in - or after
+    arrival_days with whatever arrived. Never dropped for being slow: it was asked for."""
+    aired = [e for e in eps if e.get("monitored") and e["seasonNumber"] > 0
+             and e.get("airDateUtc") and parse(e["airDateUtc"]) <= now]
+    have = [e for e in aired if e["hasFile"]]
+    late = bool(have) and now - parse(rec["added_at"]) > timedelta(days=cfg.arrival_days)
+    jf = index.get(s["path"].rstrip("/"))
+    if aired and len(have) == len(aired) or late:
+        if jf:
+            _open_window(cfg, c, rec, jf["Id"], users, now, lines,
+                         "request arrived" if len(have) == len(aired) else f"{len(have)}/{len(aired)} episodes arrived")
+        else:
+            lines.append(f"{rec['title']}: files present but Jellyfin hasn't indexed {s['path']} yet - waiting")
+    elif have != aired:
+        c.sonarr.search_episodes([e["id"] for e in aired if not e["hasFile"]])
+
+
+def _decide_movie(cfg, c, rec, movies, movie_index, mtag, users, now, keeps, drops, lines):
+    m = movies.get(rec["radarr_id"])
+    if rec["status"] == "moving":
+        if not m or m.get("tmdbId") != rec["tmdb"]:
+            rec["status"] = "released"
+            lines.append(f"{rec['title']}: removed from Radarr during move")
+            return
+        _finish_keep_steps(c, rec, TAG)
+        lines.extend(finish_move(c, rec, {}, users, now))
+        return
+    if rec["status"] != "active":
+        return
+    if not m or mtag not in m.get("tags", []) or m.get("tmdbId") != rec["tmdb"]:
+        rec["status"] = "released"
+        lines.append(f"{rec['title']}: no longer a trial in Radarr (tag removed or movie deleted) - left alone")
+        return
+    if rec.get("override"):
+        (keeps if rec["override"]["verdict"] == "keep" else drops).append((rec, m, f"overruled by {rec['override']['by']}"))
+        return
+    jf = movie_index.get(m["path"].rstrip("/"))
+    if rec["window_start"] is None:
+        if m.get("hasFile") and jf:
+            _open_window(cfg, c, rec, jf["Id"], users, now, lines)
+        elif m.get("hasFile"):
+            lines.append(f"{rec['title']}: file present but Jellyfin hasn't indexed it yet - waiting")
+        return
+    if now < parse(rec["window_start"]) + timedelta(days=cfg.window_days):
+        if jf:
+            _mark_on_trial(cfg, c, rec, jf["Id"], users, lines)
+        return
+    if not jf:
+        lines.append(f"{rec['title']}: not found in Jellyfin - decision postponed")
+        return
+    views, rec["played"] = movie_views(c, jf["Id"], users)
+    verdict, likes, dislikes = decide(views, 1)
+    (keeps if verdict == "keep" else drops).append((rec, m, f"{likes} like / {dislikes} dislike"))
+
+
 def daily_decide(cfg, c, st, now, lines=None):
     lines = [] if lines is None else lines
     n = cfg.trial_episodes
+    adopt_requests(cfg, c, st, now, lines)
     series = {s["id"]: s for s in c.sonarr.series()}
     tag = c.sonarr.tag_id(TAG)
     users = c.jellyfin.users()
     index = c.jellyfin.series_index()
     keeps, drops = [], []
+    has_movies = c.radarr is not None and any(is_movie(r) and r["status"] in ("active", "moving") for r in st["shows"].values())
+    movies = {m["id"]: m for m in c.radarr.movies()} if has_movies else {}
+    movie_index = c.jellyfin.movie_index() if has_movies else {}
+    mtag = c.radarr.tag_id(TAG) if has_movies else None
     for rec in st["shows"].values():
+        if is_movie(rec):
+            if has_movies:
+                _decide_movie(cfg, c, rec, movies, movie_index, mtag, users, now, keeps, drops, lines)
+            continue
         if rec["status"] == "moving":
             s = series.get(rec["sonarr_id"])
             if not s or s.get("tvdbId") != rec["tvdb"]:
@@ -237,13 +404,19 @@ def daily_decide(cfg, c, st, now, lines=None):
             rec["status"] = "released"
             lines.append(f"{rec['title']}: no longer a trial in Sonarr (tag removed or series deleted) - left alone")
             continue
+        if rec.get("override"):   # an admin (adriel / bobby) overruled the vote
+            (keeps if rec["override"]["verdict"] == "keep" else drops).append((rec, s, f"overruled by {rec['override']['by']}"))
+            continue
         eps = c.sonarr.episodes(s["id"])
         just_searched = False
         if not rec.get("setup_done"):
             just_searched = setup_trial(c, rec, eps, n)
             eps = c.sonarr.episodes(s["id"])
-        if c.seerr.requested_since(rec["tmdb"], rec["added_at"]) or user_extended(rec, eps, n):
+        if not is_request(rec) and (c.seerr.requested_since(rec["tmdb"], rec["added_at"]) or user_extended(rec, eps, n)):
             keeps.append((rec, s, "requested by a user"))
+            continue
+        if rec["window_start"] is None and is_request(rec):
+            _request_arrival(cfg, c, rec, s, eps, index, users, now, lines)
             continue
         if rec["window_start"] is None:
             t = trial_eps(eps, n)
@@ -269,6 +442,11 @@ def daily_decide(cfg, c, st, now, lines=None):
         if not jf:
             lines.append(f"{rec['title']}: not found in Jellyfin - decision postponed")
             continue
+        if is_request(rec):
+            views, rec["played"], n_eff = request_views(c, jf["Id"], users, n)
+            verdict, likes, dislikes = decide(views, n_eff)
+            (keeps if verdict == "keep" else drops).append((rec, s, f"{likes} like / {dislikes} dislike"))
+            continue
         views, snap = user_views(c, jf["Id"], users, n)
         if not any(len(v) == n for v in snap.values()):
             lines.append(f"{rec['title']}: Jellyfin doesn't show all {n} trial episodes yet - decision postponed")
@@ -293,7 +471,7 @@ def daily_decide(cfg, c, st, now, lines=None):
         lines.insert(0, f"SAFETY STOP: {len(drops)} deletions due (> {cfg.max_deletes_per_run}); nothing deleted - check the trials app")
         drops = []
     for rec, s, why in keeps:
-        lines.append(apply_keep(cfg, c, rec, s, tag, index, users, now, why))
+        lines.append(apply_keep(cfg, c, rec, s, tag, movie_index if is_movie(rec) else index, users, now, why))
     for rec, s, why in drops:
         lines.append(apply_drop(c, st, rec, s, why, now))
     return lines

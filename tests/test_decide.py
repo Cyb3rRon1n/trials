@@ -38,3 +38,11 @@ def test_nobody_engaged_rejects():
 
 def test_single_engaged_like_keeps():
     assert decide([UserView(None, 3, 3)] + [UserView(None, 0, 0)] * 8, N) == ("keep", 1, 0)
+
+
+def test_favorite_counts_as_two_likes_and_beats_own_dislike():
+    from trials.decide import UserView, decide
+    fav = UserView(likes=False, watched=0, finished=0, favorite=True)       # ♥ but also 👎'd: ♥ wins
+    down = UserView(likes=False, watched=1, finished=0)
+    assert decide([fav, down, down], 3) == ("keep", 2, 2)                   # 2 vs 2: tie keeps
+    assert decide([fav, down, down, down], 3) == ("reject", 2, 3)

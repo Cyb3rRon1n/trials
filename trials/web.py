@@ -1,5 +1,8 @@
 import html
+import io
+import os
 import secrets
+import zipfile
 import threading
 import urllib.parse
 from datetime import datetime, timedelta, timezone
@@ -21,12 +24,14 @@ form.inline{display:inline}button{font:inherit;border:1px solid var(--line);back
 button.on.up{border-color:var(--up);color:var(--up)}button.on.down{border-color:var(--down);color:var(--down)}
 a{color:var(--accent)}input{font:inherit;padding:8px;border:1px solid var(--line);border-radius:8px;width:100%;margin:4px 0 12px;background:var(--card);color:var(--fg)}
 .note{color:var(--muted);font-size:.9rem}
+nav{display:flex;gap:14px;flex-wrap:wrap;margin:0 0 18px}nav a{text-decoration:none}
+button.admin{border-style:dashed}.tag{font-size:.8rem;color:var(--muted);border:1px solid var(--line);border-radius:6px;padding:1px 6px;margin-left:6px}
 """
 
 
 def page(body):
     return (f'<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" '
-            f'content="width=device-width,initial-scale=1"><title>Trial Shows</title><style>{CSS}</style></head>'
+            f'content="width=device-width,initial-scale=1"><title>Trials</title><style>{CSS}</style></head>'
             f'<body><main>{body}</main></body></html>')
 
 
@@ -40,9 +45,68 @@ def render_login(msg=""):
 
 def trials_view(cfg, c):
     st = state_mod.load(cfg.state_path)
+    active = [rec for rec in st["shows"].values() if rec.get("status") == "active"]
     index = c.jellyfin.series_index()
-    rows = [(rec, index.get(rec["path"].rstrip("/"))) for rec in st["shows"].values() if rec.get("status") == "active"]
+    movies = c.jellyfin.movie_index() if any(r.get("media") == "movie" for r in active) else {}
+    rows = [(rec, (movies if rec.get("media") == "movie" else index).get(rec["path"].rstrip("/"))) for rec in active]
     return st, rows
+
+
+def trial_key(rec):
+    return f"movie:{rec['tmdb']}" if rec.get("media") == "movie" else str(rec["tvdb"])
+
+
+def nav(cfg, user, here):
+    links = [("/", "🗳️ On trial"), ("/rate", "👍 Rate what you watched")]
+    if cfg.is_admin(user):
+        links.append(("/admin/backup.zip", "⬇️ Download user backup"))
+    return "<nav>" + "".join(f'<a href="{h}">{"<b>" + l + "</b>" if h == here else l}</a>' for h, l in links) + "</nav>"
+
+
+def recent_titles(c, user):
+    """the user's recently watched movies and shows (episodes rolled up to their show)"""
+    out = {}
+    for it in c.jellyfin.recently_played(user["id"]):
+        if it.get("Type") == "Episode" and it.get("SeriesId"):
+            out.setdefault(it["SeriesId"], (it.get("SeriesName") or "?", "📺"))
+        elif it.get("Type") == "Movie":
+            out.setdefault(it["Id"], (f"{it.get('Name')} ({it.get('ProductionYear') or '?'})", "🎬"))
+    return out
+
+
+def render_rate(cfg, c, user):
+    pub = cfg.jellyfin_public_url.rstrip("/")
+    cards = []
+    for iid, (title, icon) in recent_titles(c, user).items():
+        mine = c.jellyfin.likes(iid, user["id"])
+        def btn(value, label, on):
+            return (f'<form class="inline" method="post" action="/rate"><input type="hidden" name="item" value="{html.escape(iid)}">'
+                    f'<input type="hidden" name="value" value="{value}"><button class="{"on " if on else ""}{value}">{label}</button></form>')
+        cards.append(f'<div class="card"><img src="{pub}/Items/{html.escape(iid)}/Images/Primary?maxHeight=252" alt="">'
+                     f'<div class="meta"><h2>{icon} <a href="{pub}/web/#/details?id={html.escape(iid)}">{html.escape(title)}</a></h2>'
+                     f'<div>{btn("up", "👍 Liked it", mine is True)}{btn("down", "👎 Not for me", mine is False)}'
+                     f'{btn("clear", "Clear", False) if mine is not None else ""}</div></div></div>')
+    body = (nav(cfg, user, "/rate") + '<h1>Rate what you watched</h1><p class="lead">Your recent movies and shows. '
+            'A quick 👍/👎 helps decide what stays on the server.</p>')
+    return page(body + ("".join(cards) or '<p class="note">Nothing watched recently.</p>'))
+
+
+def latest_backup(cfg):
+    try:
+        days = sorted(d for d in os.listdir(cfg.backups_dir) if d[:4].isdigit() and os.path.isdir(os.path.join(cfg.backups_dir, d)))
+    except FileNotFoundError:
+        return None
+    return os.path.join(cfg.backups_dir, days[-1]) if days else None
+
+
+def zip_dir(path):
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for root, _, files in os.walk(path):
+            for f in files:
+                full = os.path.join(root, f)
+                z.write(full, os.path.join(os.path.basename(path), os.path.relpath(full, path)))
+    return buf.getvalue()
 
 
 def _deadline(cfg, rec):
@@ -55,12 +119,23 @@ def _deadline(cfg, rec):
 
 def render_page(cfg, c, user):
     st, rows = trials_view(cfg, c)
+    admin = cfg.is_admin(user)
     pub = cfg.jellyfin_public_url.rstrip("/")
     cards = []
     for rec, jf in rows:
-        title = html.escape(rec["title"])
+        title = html.escape(rec["title"]) + ('<span class="tag">🎬 movie</span>' if rec.get("media") == "movie" else "") \
+            + ('<span class="tag">requested</span>' if rec.get("kind") == "request" else "")
+        over = ""
+        if admin:
+            key = html.escape(trial_key(rec))
+            if rec.get("override"):
+                over = f'<br><small>Overruled by {html.escape(rec["override"]["by"])}: {rec["override"]["verdict"]} (applying)</small>'
+            else:
+                over = "".join(f'<form class="inline" method="post" action="/override"><input type="hidden" name="key" value="{key}">'
+                               f'<input type="hidden" name="verdict" value="{v}"><button class="admin">{l}</button></form>'
+                               for v, l in (("keep", "✅ Admin: keep"), ("drop", "🗑️ Admin: drop")))
         if not jf:
-            cards.append(f'<div class="card"><div class="meta"><h2>{title}</h2><small>{html.escape(_deadline(cfg, rec))}</small></div></div>')
+            cards.append(f'<div class="card"><div class="meta"><h2>{title}</h2><small>{html.escape(_deadline(cfg, rec))}</small><div>{over}</div></div></div>')
             continue
         iid = html.escape(jf["Id"])
         mine = c.jellyfin.likes(jf["Id"], user["id"])
@@ -73,13 +148,14 @@ def render_page(cfg, c, user):
         dry = f'<br><small>Current outcome: {html.escape(rec["dry_run"])}</small>' if rec.get("dry_run") else ""
         cards.append(f'<div class="card"><img src="{pub}/Items/{iid}/Images/Primary?maxHeight=252" alt="">'
                      f'<div class="meta"><h2><a href="{pub}/web/#/details?id={iid}">{title}</a></h2>'
-                     f'<small>{html.escape(_deadline(cfg, rec))}</small>{dry}<div>{buttons}</div></div></div>')
-    body = (f'<h1>Trial Shows</h1><p class="lead">Hi {html.escape(user["name"])}. These shows are on a {cfg.window_days}-day trial '
-            f'with their first {cfg.trial_episodes} episodes. Vote to keep or drop them - the majority of people who tried a show decides. '
-            'If you watch but don\'t vote, finishing all trial episodes counts as a keep.</p>')
+                     f'<small>{html.escape(_deadline(cfg, rec))}</small>{dry}<div>{buttons}{over}</div></div></div>')
+    body = nav(cfg, user, "/") + (f'<h1>On Trial</h1><p class="lead">Hi {html.escape(user["name"])}. These are on a {cfg.window_days}-day trial: '
+            f'new shows with their first {cfg.trial_episodes} episodes, and requests the admins sent here. Vote to keep or drop them - '
+            'the majority of people who tried it decides. ♥ Favorite in Jellyfin counts as two 👍. If you watch but don\'t vote, finishing it counts as a keep. '
+            'adriel and bobby can overrule a result.</p>')
     body += "".join(cards) or '<p class="note">No shows on trial right now.</p>'
-    if user["admin"]:
-        rejected = [r for r in st["shows"].values() if r.get("status") == "rejected"]
+    if admin:
+        rejected = [r for r in st["shows"].values() if r.get("status") == "rejected" and r.get("tvdb")]
         if rejected:
             body += "<h2>Rejected</h2>" + "".join(
                 f'<form method="post" action="/unreject"><input type="hidden" name="tvdb" value="{r["tvdb"]}">'
@@ -88,7 +164,7 @@ def render_page(cfg, c, user):
     return page(body)
 
 
-def make_server(cfg, c, host="0.0.0.0", port=None):
+def make_server(cfg, c, host="0.0.0.0", port=None, on_override=None):
     sessions, lock = {}, threading.Lock()
 
     class Handler(BaseHTTPRequestHandler):
@@ -96,7 +172,7 @@ def make_server(cfg, c, host="0.0.0.0", port=None):
             pass
 
         def _send(self, code, body="", ctype="text/html; charset=utf-8", headers=()):
-            data = body.encode()
+            data = body if isinstance(body, bytes) else body.encode()
             self.send_response(code)
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(data)))
@@ -105,8 +181,8 @@ def make_server(cfg, c, host="0.0.0.0", port=None):
             self.end_headers()
             self.wfile.write(data)
 
-        def _redirect(self, headers=()):
-            self._send(303, "", headers=[("Location", "/"), *headers])
+        def _redirect(self, headers=(), to="/"):
+            self._send(303, "", headers=[("Location", to), *headers])
 
         def _token(self):
             morsel = cookies.SimpleCookie(self.headers.get("Cookie", "")).get("trials_session")
@@ -122,10 +198,23 @@ def make_server(cfg, c, host="0.0.0.0", port=None):
         def _handle_get(self):
             if self.path == "/healthz":
                 return self._send(200, "ok", "text/plain")
-            if self.path != "/":
-                return self._send(404, "not found", "text/plain")
             user = self._user()
-            self._send(200, render_page(cfg, c, user) if user else render_login())
+            if self.path not in ("/", "/rate", "/admin/backup.zip"):
+                return self._send(404, "not found", "text/plain")
+            if not user:
+                return self._send(200, render_login())
+            if self.path == "/rate":
+                return self._send(200, render_rate(cfg, c, user))
+            if self.path == "/admin/backup.zip":
+                if not cfg.is_admin(user):
+                    return self._send(403, "admins only", "text/plain")
+                snap = latest_backup(cfg)
+                if not snap:
+                    return self._send(404, "no backup yet", "text/plain")
+                name = f"userdata-{os.path.basename(snap)}.zip"
+                return self._send(200, zip_dir(snap), "application/zip",
+                                  [("Content-Disposition", f'attachment; filename="{name}"')])
+            self._send(200, render_page(cfg, c, user))
 
         def _handle_post(self):
             form = self._form()
@@ -151,8 +240,28 @@ def make_server(cfg, c, host="0.0.0.0", port=None):
                     return self._send(400, "not a trial show", "text/plain")
                 c.jellyfin.set_like(form["item"], user["id"], value)
                 return self._redirect()
+            if self.path == "/rate":
+                value = {"up": True, "down": False, "clear": None}.get(form.get("value"), "bad")
+                if value == "bad" or form.get("item") not in recent_titles(c, user):
+                    return self._send(400, "not something you watched recently", "text/plain")
+                c.jellyfin.set_like(form["item"], user["id"], value)
+                return self._redirect(to="/rate")
+            if self.path == "/override":
+                if not cfg.is_admin(user):
+                    return self._send(403, "admins only", "text/plain")
+                verdict = form.get("verdict")
+                if verdict not in ("keep", "drop"):
+                    return self._send(400, "bad verdict", "text/plain")
+                with state_mod.locked(cfg.state_path) as st:
+                    rec = st["shows"].get(form.get("key", ""))
+                    if not rec or rec.get("status") != "active":
+                        return self._send(400, "not an active trial", "text/plain")
+                    rec["override"] = {"verdict": verdict, "by": user["name"], "at": datetime.now(timezone.utc).isoformat()}
+                if on_override:
+                    on_override()
+                return self._redirect()
             if self.path == "/unreject":
-                if not user["admin"]:
+                if not cfg.is_admin(user):
                     return self._send(403, "admins only", "text/plain")
                 tvdb = int(form.get("tvdb") or 0)
                 with state_mod.locked(cfg.state_path) as st:
