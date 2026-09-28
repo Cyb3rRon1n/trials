@@ -150,7 +150,7 @@ def render_page(cfg, c, user):
                      f'<div class="meta"><h2><a href="{pub}/web/#/details?id={iid}">{title}</a></h2>'
                      f'<small>{html.escape(_deadline(cfg, rec))}</small>{dry}<div>{buttons}{over}</div></div></div>')
     body = nav(cfg, user, "/") + (f'<h1>On Trial</h1><p class="lead">Hi {html.escape(user["name"])}. These are on a {cfg.window_days}-day trial: '
-            f'new shows with their first {cfg.trial_episodes} episodes, and requests the admins sent here. Vote to keep or drop them - '
+            f'new shows with the first half of season 1, and requests the admins sent here. Vote to keep or drop them - '
             'the majority of people who tried it decides. ♥ Favorite in Jellyfin counts as two 👍. If you watch but don\'t vote, finishing it counts as a keep. '
             'The admins can overrule a result.</p>')
     body += "".join(cards) or '<p class="note">No shows on trial right now.</p>'

@@ -37,7 +37,7 @@ class FakeSonarr:
                  seriesType=series_type)
         self.series_db[sid] = s
         self.eps[sid] = [{"id": sid * 100 + i, "seasonNumber": 1, "episodeNumber": i,
-                          "monitored": False, "hasFile": False} for i in range(1, 11)]
+                          "monitored": False, "hasFile": False} for i in range(1, 7)]
         self.calls.append(("add", sid))
         return dict(s)
 
@@ -169,10 +169,11 @@ class FakeSeerr:
     def __init__(self):
         self.trending, self.details, self.requested = [], {}, set()
 
-    def add_show(self, tmdb, tvdb, name, last=(1, 8), genres=("Drama",), origin=("US",)):
+    def add_show(self, tmdb, tvdb, name, last=(1, 8), genres=("Drama",), origin=("US",), s1_eps=6):
         self.trending.append({"id": tmdb, "mediaType": "tv", "name": name})
         self.details[tmdb] = {"id": tmdb, "name": name, "externalIds": {"tvdbId": tvdb},
                               "lastEpisodeToAir": {"seasonNumber": last[0], "episodeNumber": last[1]},
+                              "seasons": [{"seasonNumber": 1, "episodeCount": s1_eps}],
                               "genres": [{"name": g} for g in genres], "originCountry": list(origin)}
 
     def trending_tv(self, pages=3):

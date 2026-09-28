@@ -299,7 +299,7 @@ def test_request_before_window_with_setup_pending_keeps(tmp_path):
     c.seerr.requested.add(5)
     lines = daily_decide(cfg, c, st, NOW)
     assert rec["setup_done"] is True
-    assert ("search", tuple(e["id"] for e in c.sonarr.eps[sid][:3])) in c.sonarr.calls
+    assert ("search", tuple(e["id"] for e in c.sonarr.eps[sid][:2])) in c.sonarr.calls
     assert ("move", sid, "/data/media/tv") in c.sonarr.calls
 
 

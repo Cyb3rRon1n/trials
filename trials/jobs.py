@@ -75,21 +75,35 @@ def parse(s):
     return datetime.fromisoformat(s.replace("Z", "+00:00"))
 
 
-def aired_enough(details, n):
+def half_season(count):
+    """trial length: the first half of season 1, rounded up"""
+    return max(1, -(-count // 2))
+
+
+def trial_n(cfg, rec):
+    """trials set up before half-season trials keep their fixed episode count"""
+    return rec.get("trial_n", cfg.trial_episodes)
+
+
+def aired_enough(details):
+    """the first half of season 1 is out (Seerr lists the season's full planned length)"""
+    count = next((x.get("episodeCount") or 0 for x in details.get("seasons") or [] if x.get("seasonNumber") == 1), 0)
     last = details.get("lastEpisodeToAir") or {}
     season, episode = last.get("seasonNumber") or 0, last.get("episodeNumber") or 0
-    return season > 1 or (season == 1 and episode >= n)
+    return count > 0 and (season > 1 or (season == 1 and episode >= half_season(count)))
 
 
 def trial_eps(episodes, n):
     return [e for e in episodes if e["seasonNumber"] == 1 and 1 <= e["episodeNumber"] <= n]
 
 
-def setup_trial(c, rec, episodes, n):
+def setup_trial(c, rec, episodes):
+    n = half_season(sum(1 for e in episodes if e["seasonNumber"] == 1))
     trial = [e["id"] for e in trial_eps(episodes, n)]
     if not trial:
         rec["setup_done"] = False
         return False
+    rec["trial_n"] = n
     sid = rec["sonarr_id"]
     c.sonarr.set_monitored([e["id"] for e in episodes if e["id"] not in trial], False)
     c.sonarr.set_monitored(trial, True)
@@ -175,7 +189,7 @@ def weekly_add(cfg, c, st, now, lines=None):
     for rank, item in enumerate(pool):
         det = c.seerr.tv(item["id"])
         tvdb = (det.get("externalIds") or {}).get("tvdbId")
-        if not tvdb or tvdb in skip or not aired_enough(det, cfg.trial_episodes):
+        if not tvdb or tvdb in skip or not aired_enough(det):
             continue
         ranked.append((affinity([g["name"] for g in det.get("genres") or []], prof), rank, item, det, tvdb))
     # half taste match, half trending position - so it stays "what's new" and not just "what's big"
@@ -197,8 +211,8 @@ def weekly_add(cfg, c, st, now, lines=None):
             "added_at": iso(now), "window_start": None, "status": "active", "dest": dest,
             "played": None, "setup_done": False, "dry_run": None}
         skip.add(tvdb)
-        setup_trial(c, rec, c.sonarr.episodes(s["id"]), cfg.trial_episodes)
-        lines.append(f"trial added: {s['title']} (S01E01-E{cfg.trial_episodes:02d}) -> Trials library")
+        setup_trial(c, rec, c.sonarr.episodes(s["id"]))
+        lines.append(f"trial added: {s['title']} (S01E01-E{trial_n(cfg, rec):02d}) -> Trials library")
         added += 1
     return lines
 
@@ -328,7 +342,7 @@ def apply_keep(cfg, c, rec, s, tag, index, users, now, why):
         elif is_request(rec):
             views, rec["played"], _ = request_views(c, jf["Id"], users, cfg.trial_episodes)
         else:
-            views, rec["played"] = user_views(c, jf["Id"], users, cfg.trial_episodes)
+            views, rec["played"] = user_views(c, jf["Id"], users, trial_n(cfg, rec))
         rec["taste"] = _taste(users, views)
         if rec.get("noted") and users:
             try:  # cosmetic; the move normally gives Jellyfin a fresh item anyway
@@ -428,7 +442,6 @@ def _decide_movie(cfg, c, rec, movies, movie_index, mtag, users, now, keeps, dro
 
 def daily_decide(cfg, c, st, now, lines=None):
     lines = [] if lines is None else lines
-    n = cfg.trial_episodes
     adopt_requests(cfg, c, st, now, lines)
     series = {s["id"]: s for s in c.sonarr.series()}
     tag = c.sonarr.tag_id(TAG)
@@ -466,8 +479,9 @@ def daily_decide(cfg, c, st, now, lines=None):
         eps = c.sonarr.episodes(s["id"])
         just_searched = False
         if not rec.get("setup_done"):
-            just_searched = setup_trial(c, rec, eps, n)
+            just_searched = setup_trial(c, rec, eps)
             eps = c.sonarr.episodes(s["id"])
+        n = cfg.trial_episodes if is_request(rec) else trial_n(cfg, rec)
         if not is_request(rec) and (c.seerr.requested_since(rec["tmdb"], rec["added_at"]) or user_extended(rec, eps, n)):
             keeps.append((rec, s, "requested by a user"))
             continue

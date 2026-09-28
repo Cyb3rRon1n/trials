@@ -113,3 +113,13 @@ def test_picks_follow_what_users_watch_like_and_favorite(tmp_path):
 def test_genre_names_normalise():
     from trials.jobs import genres_of
     assert genres_of(["Sci-Fi & Fantasy", "Action & Adventure"]) == {"science fiction", "fantasy", "action", "adventure"}
+
+
+def test_trial_is_first_half_of_season_1_rounded_up():
+    from trials.jobs import aired_enough, half_season
+    assert [half_season(n) for n in (1, 2, 7, 12, 24)] == [1, 1, 4, 6, 12]
+    det = {"seasons": [{"seasonNumber": 1, "episodeCount": 12}], "lastEpisodeToAir": {"seasonNumber": 1, "episodeNumber": 5}}
+    assert not aired_enough(det)
+    det["lastEpisodeToAir"]["episodeNumber"] = 6
+    assert aired_enough(det)
+    assert not aired_enough({"lastEpisodeToAir": {"seasonNumber": 2, "episodeNumber": 1}})   # no season info
