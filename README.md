@@ -1,8 +1,8 @@
 # trials
 
 Weekly "trial shows" for a Jellyfin + Sonarr + Seerr stack. Every Monday it adds the first
-3 episodes of 3 TMDb-trending shows to a separate **Trials** library. Users vote 👍/👎 on a
-small page. After 21 days, shows most people liked are moved to their permanent library
+half of season 1 of 3 TMDb-trending shows to a separate **Trials** library. Users vote 👍/👎 on a
+small page. After 14 days, shows most people liked are moved to their permanent library
 and completed; the rest are deleted. It only ever touches shows it added itself.
 
 Design: `docs/superpowers/specs/2026-09-25-trial-shows-design.md`.

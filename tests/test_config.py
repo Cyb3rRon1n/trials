@@ -8,7 +8,7 @@ BASE = {"SEERR_URL": "http://seerr:5055", "SEERR_KEY": "sk", "SONARR_URL": "http
 
 def test_defaults():
     c = Config.from_env(BASE)
-    assert (c.trials_per_week, c.trial_episodes, c.window_days, c.arrival_days) == (3, 3, 21, 14)
+    assert (c.trials_per_week, c.trial_episodes, c.window_days, c.arrival_days) == (3, 3, 14, 14)
     assert c.min_free_tb == 1.0 and c.max_deletes_per_run == 3 and c.enforce is False
     assert c.trials_root == "/data/media/trials" and c.port == 8080
 

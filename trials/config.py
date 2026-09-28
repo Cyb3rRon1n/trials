@@ -20,8 +20,8 @@ class Config:
     ntfy_topic: str = ""
     quality_profile: str = "HD-1080p"
     trials_per_week: int = 3
-    trial_episodes: int = 3
-    window_days: int = 21
+    trial_episodes: int = 3     # request trials + trials set up before half-season trials
+    window_days: int = 14
     arrival_days: int = 14
     min_free_tb: float = 1.0
     max_deletes_per_run: int = 3
