@@ -162,3 +162,43 @@ def test_add_job_adds_shows_and_movies(tmp_path):
     st = state.load(cfg.state_path)
     assert "1005" in st["shows"] and "movie:1" in st["shows"]
     assert any("movie trial added" in l for l in lines) and "movie trial added" in c.ntfy.sent[0][1]
+
+
+def test_movie_add_failure_does_not_abort_the_add_job(tmp_path):
+    from fakes import FakeRadarr
+    cfg = make_cfg(tmp_path)
+    c = Clients(FakeSonarr(), FakeJellyfin(), FakeSeerr(), FakeNtfy(), FakeRadarr())
+    c.seerr.add_show(5, 1005, "Plain Show")
+    c.sonarr.lookups[1005] = {"title": "Plain Show", "tvdbId": 1005}
+
+    def boom(path):
+        raise RuntimeError("radarr down")
+    c.radarr.free_bytes = boom
+    lines = run_job("add", cfg, c, MON_1130)
+    st = state.load(cfg.state_path)
+    assert "1005" in st["shows"] and st["last_add_week"] == "2026-W41" and "retry_after_add" not in st
+    assert any("movie add failed" in l and "radarr down" in l for l in lines)
+
+
+def test_one_bad_movie_candidate_is_skipped(tmp_path):
+    from fakes import FakeRadarr
+    from trials.jobs import weekly_add_movies
+    cfg = make_cfg(tmp_path)
+    c = Clients(FakeSonarr(), FakeJellyfin(), FakeSeerr(), FakeNtfy(), FakeRadarr())
+    c.seerr.add_film(1, "Broken", digital_days_ago=None)
+    c.seerr.add_film(2, "Broken Details")
+    c.seerr.add_film(3, "Fine")
+    real_movie, real_lookup = c.seerr.movie, c.radarr.lookup_tmdb
+    c.seerr.movie = lambda t: (_ for _ in ()).throw(RuntimeError("seerr 500")) if t == 2 else real_movie(t)
+    c.radarr.lookup_tmdb = lambda t: (_ for _ in ()).throw(RuntimeError("radarr 500")) if t == 1 else real_lookup(t)
+    st = state.empty()
+    weekly_add_movies(cfg, c, st, NOW)
+    assert sorted(st["shows"]) == ["movie:3"]
+
+
+def test_probe_checks_radarr(tmp_path, capsys):
+    from fakes import FakeRadarr
+    cfg = make_cfg(tmp_path)
+    probe(cfg, Clients(FakeSonarr(), FakeJellyfin(), FakeSeerr(), FakeNtfy(), FakeRadarr()))
+    out = capsys.readouterr().out
+    assert "radarr quality profile id: 4" in out and "free at /data/media/trials (radarr): 5.00 TB" in out

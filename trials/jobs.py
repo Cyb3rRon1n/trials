@@ -309,18 +309,24 @@ def weekly_add_movies(cfg, c, st, now, lines=None):
     for rank, item in enumerate(pool):
         if item["id"] in skip:
             continue
-        det, lookup = c.seerr.movie(item["id"]), None
-        released = movie_release(det)
-        if not released:   # TMDb has no digital/physical date: Radarr may (it reads other sources too)
-            lookup = c.radarr.lookup_tmdb(item["id"]) or {}
-            released = lookup.get("digitalRelease") or lookup.get("physicalRelease")
+        try:
+            det, lookup = c.seerr.movie(item["id"]), None
+            released = movie_release(det)
+            if not released:   # TMDb has no digital/physical date: Radarr may (it reads other sources too)
+                lookup = c.radarr.lookup_tmdb(item["id"]) or {}
+                released = lookup.get("digitalRelease") or lookup.get("physicalRelease")
+        except Exception:   # one bad candidate (Seerr/Radarr hiccup) just isn't picked this week
+            continue
         if recent(released, now, cfg.new_days):
             ranked.append((affinity([g["name"] for g in det.get("genres") or []], prof), rank, item, lookup))
     added, tag, profile = 0, None, None
     for _, _, item, lookup in _rank(ranked, len(pool)):
         if added >= target:
             break
-        lookup = lookup or c.radarr.lookup_tmdb(item["id"])
+        try:
+            lookup = lookup or c.radarr.lookup_tmdb(item["id"])
+        except Exception:
+            continue
         if not lookup:
             continue
         added += 1
