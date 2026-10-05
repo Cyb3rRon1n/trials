@@ -498,10 +498,14 @@ def apply_keep(cfg, c, rec, s, tag, index, users, now, why):
 def apply_drop(c, st, rec, s, why, now):
     unavailable = why == "unavailable"
     if is_movie(rec):
-        c.radarr.delete_movie(s["id"], exclude=True)
-        rec["status"] = "rejected"
-        st.setdefault("rejected_movies", []).append(rec["tmdb"])
-        msg = f"DROPPED {rec['title']}: never arrived - deleted" if unavailable else f"REJECTED {rec['title']} ({why}) - deleted"
+        c.radarr.delete_movie(s["id"], exclude=not unavailable)
+        if unavailable:   # not judged, just never came: may be picked again after the cooldown
+            rec.update(status="unavailable", dropped_at=iso(now))
+            msg = f"DROPPED {rec['title']}: never arrived - deleted"
+        else:
+            rec["status"] = "rejected"
+            st.setdefault("rejected_movies", []).append(rec["tmdb"])
+            msg = f"REJECTED {rec['title']} ({why}) - deleted"
         return msg + _notify_jellyfin(c, deleted=[s["path"]])
     c.sonarr.delete_series(s["id"], exclude=not unavailable)
     if unavailable:
