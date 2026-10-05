@@ -27,14 +27,14 @@ def app(tmp_path):
     srv.shutdown()
 
 
-def req(port, method, path, form=None, cookie=None):
+def req(port, method, path, form=None, cookie=None, header="Set-Cookie"):
     conn = http.client.HTTPConnection("127.0.0.1", port)
     headers = {"Content-Type": "application/x-www-form-urlencoded"}
     if cookie:
         headers["Cookie"] = cookie
     conn.request(method, path, urllib.parse.urlencode(form or {}), headers)
     r = conn.getresponse()
-    return r.status, r.getheader("Set-Cookie"), r.read().decode()
+    return r.status, r.getheader(header), r.read().decode()
 
 
 def login(port, user):
@@ -153,32 +153,30 @@ def test_backup_download_admins_only(app, tmp_path):
     assert r.status == 200 and body[:2] == b"PK" and "userdata-2026-09-26.zip" in r.getheader("Content-Disposition")
 
 
-def where(port, method, path, form=None, cookie=None):
-    conn = http.client.HTTPConnection("127.0.0.1", port)
-    headers = {"Content-Type": "application/x-www-form-urlencoded", **({"Cookie": cookie} if cookie else {})}
-    conn.request(method, path, urllib.parse.urlencode(form or {}), headers)
-    r = conn.getresponse()
-    return r.status, r.getheader("Location"), r.getheader("Set-Cookie"), r.read().decode()
-
-
 def test_deep_link_to_one_title_survives_login(app):
     cfg, c, port = app
-    status, _, _, body = where(port, "GET", "/?t=1005")
+    status, _, body = req(port, "GET", "/?t=1005")
     assert status == 200 and 'name="t" value="1005"' in body                     # login form carries it
-    status, loc, cookie, _ = where(port, "POST", "/login", {"username": "bobby", "password": "pw", "t": "1005"})
-    assert status == 303 and loc == "/#t-1005"
-    cookie = cookie.split(";")[0]
-    assert where(port, "GET", "/?t=movie:555", cookie=cookie)[:2] == (303, "/#t-movie:555")
-    page = where(port, "GET", "/", cookie=cookie)[3]
+    form = {"username": "bobby", "password": "pw", "t": "1005"}
+    assert req(port, "POST", "/login", form, header="Location")[:2] == (303, "/#t-1005")
+    cookie = login(port, "bobby")
+    assert req(port, "GET", "/?t=movie:555", cookie=cookie, header="Location")[:2] == (303, "/#t-movie:555")
+    page = req(port, "GET", "/", cookie=cookie)[2]
     assert 'id="t-1005"' in page and ":target" in page
 
 
 def test_deep_link_ignores_junk(app):
     cfg, c, port = app
-    status, _, _, body = where(port, "GET", '/?t="><script>')
+    status, _, body = req(port, "GET", '/?t="><script>')
     assert status == 200 and "<script>" not in body and 'name="t"' not in body
-    status, loc, _, _ = where(port, "POST", "/login", {"username": "bobby", "password": "pw", "t": "//evil.example"})
-    assert loc == "/"
+    form = {"username": "bobby", "password": "pw", "t": "//evil.example"}
+    assert req(port, "POST", "/login", form, header="Location")[1] == "/"
+
+
+def test_post_routes_ignore_a_query_string(app):
+    cfg, c, port = app
+    assert req(port, "POST", "/vote?from=qr", {"item": "jf1", "value": "up"}, login(port, "bobby"))[0] == 303
+    assert c.jellyfin.like[("jf1", "u2")] is True
 
 
 def test_session_cookie_is_lax_so_a_scanned_qr_link_arrives_signed_in(app):

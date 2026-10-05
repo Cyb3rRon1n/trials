@@ -226,8 +226,8 @@ def make_server(cfg, c, host="0.0.0.0", port=None, on_override=None):
             self._send(200, render_page(cfg, c, user))
 
         def _handle_post(self):
-            form = self._form()
-            if self.path == "/login":
+            form, path = self._form(), urllib.parse.urlsplit(self.path).path
+            if path == "/login":
                 user = c.jellyfin.authenticate(form.get("username", ""), form.get("password", ""))
                 t = deep_link(form.get("t"))
                 if not user:
@@ -240,24 +240,24 @@ def make_server(cfg, c, host="0.0.0.0", port=None, on_override=None):
             user = self._user()
             if not user:
                 return self._redirect()
-            if self.path == "/logout":
+            if path == "/logout":
                 with lock:
                     sessions.pop(self._token(), None)
                 return self._redirect([("Set-Cookie", "trials_session=; Path=/; Max-Age=0")])
-            if self.path == "/vote":
+            if path == "/vote":
                 value = {"up": True, "down": False, "clear": None}.get(form.get("value"), "bad")
                 allowed = {jf["Id"] for _, jf in trials_view(cfg, c)[1] if jf}
                 if value == "bad" or form.get("item") not in allowed:
                     return self._send(400, "not a trial show", "text/plain")
                 c.jellyfin.set_like(form["item"], user["id"], value)
                 return self._redirect()
-            if self.path == "/rate":
+            if path == "/rate":
                 value = {"up": True, "down": False, "clear": None}.get(form.get("value"), "bad")
                 if value == "bad" or form.get("item") not in recent_titles(c, user):
                     return self._send(400, "not something you watched recently", "text/plain")
                 c.jellyfin.set_like(form["item"], user["id"], value)
                 return self._redirect(to="/rate")
-            if self.path == "/override":
+            if path == "/override":
                 if not cfg.is_admin(user):
                     return self._send(403, "admins only", "text/plain")
                 verdict = form.get("verdict")
@@ -271,7 +271,7 @@ def make_server(cfg, c, host="0.0.0.0", port=None, on_override=None):
                 if on_override:
                     on_override()
                 return self._redirect()
-            if self.path == "/unreject":
+            if path == "/unreject":
                 if not cfg.is_admin(user):
                     return self._send(403, "admins only", "text/plain")
                 tvdb = int(form.get("tvdb") or 0)
