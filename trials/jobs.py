@@ -4,7 +4,7 @@ import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-from .decide import UserView, decide
+from .decide import UserView, decide, user_verdict
 from .library import choose_destination, ep_key, restore_plan
 
 TAG = "trial"
@@ -410,6 +410,24 @@ def _qr_restore(c, rec, item_id):
     return ""
 
 
+def _tally(cfg, c, rec, jf_id, users, now):
+    """Best-effort running count while the vote is open, worked out exactly like the final verdict.
+    Counts only - no names - for the announcer, which reads rec["tally"] from state.json."""
+    try:
+        if is_movie(rec):
+            (views, _), n = movie_views(c, jf_id, users), 1
+        elif is_request(rec) or is_season(rec):
+            views, _, n = request_views(c, jf_id, users, cfg.trial_episodes, is_season(rec))
+        else:
+            n = trial_n(cfg, rec)
+            views, _ = user_views(c, jf_id, users, n)
+        _, keep, drop = decide(views, n)
+        rec["tally"] = {"keep": keep, "drop": drop, "voters": sum(user_verdict(v, n) is not None for v in views),
+                        "at": iso(now)}
+    except Exception:   # Jellyfin hiccup: keep yesterday's numbers, never abort a run
+        pass
+
+
 def _mark_on_trial(cfg, c, rec, jf_id, users, lines):
     """Best-effort: tell Jellyfin viewers the show is on trial and where to vote. Never aborts a run."""
     _qr_badge(cfg, c, rec, jf_id, lines)
@@ -655,6 +673,7 @@ def _decide_movie(cfg, c, rec, movies, movie_index, mtag, users, now, keeps, dro
     if now < parse(rec["window_start"]) + timedelta(days=cfg.window_days):
         if jf:
             _mark_on_trial(cfg, c, rec, jf["Id"], users, lines)
+            _tally(cfg, c, rec, jf["Id"], users, now)
         return
     if not jf:
         lines.append(f"{rec['title']}: not found in Jellyfin - decision postponed")
@@ -733,6 +752,7 @@ def daily_decide(cfg, c, st, now, lines=None):
         if now < parse(rec["window_start"]) + timedelta(days=cfg.window_days):
             if s["path"].rstrip("/") in index:
                 _mark_on_trial(cfg, c, rec, index[s["path"].rstrip("/")]["Id"], users, lines)
+                _tally(cfg, c, rec, index[s["path"].rstrip("/")]["Id"], users, now)
             continue
         jf = index.get(s["path"].rstrip("/"))
         if not jf:
