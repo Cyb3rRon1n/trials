@@ -149,3 +149,16 @@ def test_scheduler_survives_corrupt_state(tmp_path, capsys):
     captured = capsys.readouterr()
     assert "trials scheduler error:" in captured.out
     assert "JSONDecodeError" in captured.out
+
+
+def test_add_job_adds_shows_and_movies(tmp_path):
+    from fakes import FakeRadarr
+    cfg = make_cfg(tmp_path)
+    c = Clients(FakeSonarr(), FakeJellyfin(), FakeSeerr(), FakeNtfy(), FakeRadarr())
+    c.seerr.add_show(5, 1005, "Plain Show")
+    c.sonarr.lookups[1005] = {"title": "Plain Show", "tvdbId": 1005}
+    c.seerr.add_film(1, "Fresh")
+    lines = run_job("add", cfg, c, MON_1130)
+    st = state.load(cfg.state_path)
+    assert "1005" in st["shows"] and "movie:1" in st["shows"]
+    assert any("movie trial added" in l for l in lines) and "movie trial added" in c.ntfy.sent[0][1]

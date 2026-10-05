@@ -264,7 +264,7 @@ def test_fakes_only_fake_methods_the_real_clients_have():
     # FakeSonarr.add_tag existed while Sonarr.add_tag didn't, so a production crash passed every test
     from trials.clients import Radarr
     import fakes
-    helpers = {"add_existing", "add", "add_show"}
+    helpers = {"add_existing", "add", "add_show", "add_film"}
     for fake, real in ((fakes.FakeSonarr, Sonarr), (fakes.FakeRadarr, Radarr), (fakes.FakeSeerr, Seerr),
                        (fakes.FakeJellyfin, Jellyfin), (fakes.FakeNtfy, Ntfy)):
         missing = {m for m in vars(fake) if not m.startswith("_") and callable(getattr(fake, m))} - helpers - set(dir(real))

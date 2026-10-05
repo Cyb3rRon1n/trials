@@ -185,6 +185,26 @@ class FakeSeerr:
                                          [{"seasonNumber": n, "episodeCount": s1_eps} for n in range(1, seasons + 1)],
                               "genres": [{"name": g} for g in genres], "originCountry": list(origin)}
 
+    def add_film(self, tmdb, title, digital_days_ago=10, physical_days_ago=None, genres=("Drama",), popular=False):
+        """a movie candidate; None = no such release date known to TMDb"""
+        dates = [{"type": t, "release_date": (NOW - timedelta(days=d)).strftime("%Y-%m-%dT00:00:00.000Z")}
+                 for t, d in ((4, digital_days_ago), (5, physical_days_ago)) if d is not None]
+        dates.append({"type": 3, "release_date": (NOW - timedelta(days=90)).strftime("%Y-%m-%dT00:00:00.000Z")})  # cinemas
+        item = {"id": tmdb, "mediaType": "movie", "title": title}
+        self.__dict__.setdefault("popular_m" if popular else "trending_m", []).append(item)
+        self.__dict__.setdefault("movie_details", {})[tmdb] = {
+            "id": tmdb, "title": title, "genres": [{"name": g} for g in genres],
+            "releases": {"results": [{"iso_3166_1": "US", "release_dates": dates}]}}
+
+    def trending_movies(self, pages=3):
+        return list(getattr(self, "trending_m", []))
+
+    def popular_movies(self, pages=2):
+        return list(getattr(self, "popular_m", []))
+
+    def movie(self, tmdb):
+        return self.movie_details[tmdb]
+
     def trending_tv(self, pages=3):
         return list(self.trending)
 
@@ -207,8 +227,25 @@ class FakeNtfy:
 
 
 class FakeRadarr:
-    def __init__(self):
-        self.tags, self.movies_db, self.calls = {"trial": 1}, {}, []
+    def __init__(self, free=5e12):
+        self.tags, self.movies_db, self.calls, self.lookups, self.free = {"trial": 1}, {}, [], {}, free
+
+    def quality_profile_id(self, name):
+        return 4
+
+    def free_bytes(self, path):
+        return self.free
+
+    def lookup_tmdb(self, tmdb):
+        self.calls.append(("lookup", tmdb))
+        return self.lookups.get(tmdb, {"tmdbId": tmdb, "title": f"Film {tmdb}", "year": 2026})
+
+    def add_movie(self, lookup, profile_id, root, tag_id):
+        mid = 40 + len(self.movies_db)
+        self.add(mid, lookup["tmdbId"], lookup["title"], f"{root}/{lookup['title']} ({lookup['year']})",
+                 year=lookup["year"], has_file=False, tags=[tag_id])
+        self.calls.append(("add", mid, lookup["tmdbId"], profile_id, root))
+        return self.get_movie(mid)
 
     def tag_id(self, label):
         return self.tags.setdefault(label, len(self.tags) + 1)
