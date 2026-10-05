@@ -164,3 +164,13 @@ def test_renewed_show_qualifies_until_its_next_season_airs(tmp_path):
         c.sonarr.lookups[tvdb] = {"title": f"show {tvdb}", "tvdbId": tvdb}
     weekly_add(cfg, c, st, NOW)
     assert sorted(st["shows"]) == ["1001", "1002"]
+
+
+def test_a_special_as_last_aired_episode_still_qualifies(tmp_path):
+    cfg, c, st = setup(tmp_path, trials_per_week=10)
+    c.seerr.add_show(1, 1001, "Christmas Special Out", last=(0, 1))
+    c.seerr.add_show(2, 1002, "Second Season Out", last=(2, 1))
+    for tvdb in (1001, 1002):
+        c.sonarr.lookups[tvdb] = {"title": f"show {tvdb}", "tvdbId": tvdb}
+    weekly_add(cfg, c, st, NOW)
+    assert sorted(st["shows"]) == ["1001"]

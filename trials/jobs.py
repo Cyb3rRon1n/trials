@@ -103,7 +103,7 @@ def brand_new(details, now, days):
                and x.get("airDate") and _day(x["airDate"]) <= now]
     last = details.get("lastEpisodeToAir") or {}
     return (len(seasons) == 1 and recent(details.get("firstAirDate"), now, days)
-            and last.get("seasonNumber") == 1 and (last.get("episodeNumber") or 0) >= 1)
+            and last.get("seasonNumber") in (0, 1) and (last.get("episodeNumber") or 0) >= 1)   # 0: a special aired last
 
 
 def is_season(rec):
