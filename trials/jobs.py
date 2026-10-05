@@ -1,3 +1,6 @@
+import glob
+import mimetypes
+import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
@@ -29,6 +32,10 @@ def is_request(rec):
 
 def is_movie(rec):
     return rec.get("media") == "movie"
+
+
+def trial_key(rec):
+    return f"movie:{rec['tmdb']}" if is_movie(rec) else str(rec["tvdb"])
 
 
 def adopt_requests(cfg, c, st, now, lines=None):
@@ -346,8 +353,66 @@ def weekly_add_movies(cfg, c, st, now, lines=None):
     return lines
 
 
+def _art_dir(cfg):
+    return os.path.join(os.path.dirname(cfg.state_path) or ".", "art")
+
+
+def _qr_badge(cfg, c, rec, jf_id, lines):
+    """Best-effort: a "scan to vote" QR on the artwork TV apps show full-screen (the backdrop, else
+    the poster) - Roku / Android TV have no 👍/👎. The original is kept on disk until the trial ends."""
+    if not cfg.qr_art or not cfg.trials_public_url or rec.get("qr") or not rec.get("window_start"):
+        return
+    try:
+        from . import art   # Pillow is only loaded when this is used
+        os.makedirs(_art_dir(cfg), exist_ok=True)
+        for kind in ("Backdrop", "Primary"):
+            # an original saved by an earlier, interrupted run wins: Jellyfin may already show the badge
+            saved = glob.glob(os.path.join(_art_dir(cfg), f"{jf_id}-{kind}.*"))
+            if saved:
+                path = saved[0]
+                with open(path, "rb") as f:
+                    orig = f.read()
+                break
+            orig = c.jellyfin.get_image(jf_id, kind)
+            if orig:
+                path = os.path.join(_art_dir(cfg), f"{jf_id}-{kind}.{art.ext_of(orig)}")
+                with open(path + ".tmp", "wb") as f:
+                    f.write(orig)
+                os.replace(path + ".tmp", path)
+                break
+        else:
+            rec["qr"] = {"item": jf_id, "type": None, "orig": None}
+            lines.append(f"{rec['title']}: no artwork in Jellyfin to put the vote QR on")
+            return
+        c.jellyfin.set_image(jf_id, kind, art.badge(orig, f"{cfg.trials_public_url.rstrip('/')}/?t={trial_key(rec)}"))
+        rec["qr"] = {"item": jf_id, "type": kind, "orig": path}
+    except Exception as e:
+        lines.append(f"{rec['title']}: couldn't add the vote QR to its artwork: {e}")
+
+
+def _qr_restore(c, rec, item_id):
+    """Put the original artwork back on `item_id` (None: the item is gone) and delete the saved copy.
+    Returns a problem to report, or "" - a failure keeps the file so nothing is lost."""
+    qr = rec.get("qr")
+    if not qr:
+        return ""
+    try:
+        if qr.get("orig"):
+            if item_id:
+                with open(qr["orig"], "rb") as f:
+                    c.jellyfin.set_image(item_id, qr["type"], f.read(), mimetypes.guess_type(qr["orig"])[0] or "image/jpeg")
+            os.remove(qr["orig"])
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        return f" (original artwork not put back, it's in {qr['orig']}: {e})"
+    rec["qr"] = None
+    return ""
+
+
 def _mark_on_trial(cfg, c, rec, jf_id, users, lines):
     """Best-effort: tell Jellyfin viewers the show is on trial and where to vote. Never aborts a run."""
+    _qr_badge(cfg, c, rec, jf_id, lines)
     if not cfg.trials_public_url or rec.get("noted") or not users or not rec.get("window_start"):
         return
     end = parse(rec["window_start"]) + timedelta(days=cfg.window_days)
@@ -465,10 +530,11 @@ def finish_move(c, rec, index, users, now):
     else:
         new_items = {}
         missing = sorted(needed)
+    art_note = _qr_restore(c, rec, jf["Id"])
     rec.update(status="kept", played=None, taste=None)
     if missing:
-        return [f"{rec['title']}: kept, watched marks restored except {missing} (not found in Jellyfin after 7 days)"]
-    return [f"{rec['title']}: now in its permanent library, watched marks restored"]
+        return [f"{rec['title']}: kept, watched marks restored except {missing} (not found in Jellyfin after 7 days){art_note}"]
+    return [f"{rec['title']}: now in its permanent library, watched marks restored{art_note}"]
 
 
 def apply_keep(cfg, c, rec, s, tag, index, users, now, why):
@@ -497,6 +563,10 @@ def apply_keep(cfg, c, rec, s, tag, index, users, now, why):
 
 
 def apply_drop(c, st, rec, s, why, now):
+    return _apply_drop(c, st, rec, s, why, now) + _qr_restore(c, rec, None)   # the item is gone
+
+
+def _apply_drop(c, st, rec, s, why, now):
     unavailable = why == "unavailable"
     if is_movie(rec):
         c.radarr.delete_movie(s["id"], exclude=not unavailable)
@@ -558,7 +628,7 @@ def _decide_movie(cfg, c, rec, movies, movie_index, mtag, users, now, keeps, dro
     if rec["status"] == "moving":
         if not m or m.get("tmdbId") != rec["tmdb"]:
             rec["status"] = "released"
-            lines.append(f"{rec['title']}: removed from Radarr during move")
+            lines.append(f"{rec['title']}: removed from Radarr during move" + _qr_restore(c, rec, None))
             return
         _finish_keep_steps(c, rec, TAG)
         lines.extend(finish_move(c, rec, {}, users, now))
@@ -567,7 +637,8 @@ def _decide_movie(cfg, c, rec, movies, movie_index, mtag, users, now, keeps, dro
         return
     if not m or mtag not in m.get("tags", []) or m.get("tmdbId") != rec["tmdb"]:
         rec["status"] = "released"
-        lines.append(f"{rec['title']}: no longer a trial in Radarr (tag removed or movie deleted) - left alone")
+        lines.append(f"{rec['title']}: no longer a trial in Radarr (tag removed or movie deleted) - left alone"
+                     + _qr_restore(c, rec, (rec.get("qr") or {}).get("item") if m and m.get("tmdbId") == rec["tmdb"] else None))
         return
     if rec.get("override"):
         (keeps if rec["override"]["verdict"] == "keep" else drops).append((rec, m, f"overruled by {rec['override']['by']}"))
@@ -614,7 +685,7 @@ def daily_decide(cfg, c, st, now, lines=None):
             s = series.get(rec["sonarr_id"])
             if not s or s.get("tvdbId") != rec["tvdb"]:
                 rec["status"] = "released"
-                lines.append(f"{rec['title']}: removed from Sonarr during move")
+                lines.append(f"{rec['title']}: removed from Sonarr during move" + _qr_restore(c, rec, None))
                 continue
             _finish_keep_steps(c, rec, tag)
             lines += finish_move(c, rec, index, users, now)
@@ -624,7 +695,8 @@ def daily_decide(cfg, c, st, now, lines=None):
         s = series.get(rec["sonarr_id"])
         if not s or tag not in s.get("tags", []) or s.get("tvdbId") != rec["tvdb"]:
             rec["status"] = "released"
-            lines.append(f"{rec['title']}: no longer a trial in Sonarr (tag removed or series deleted) - left alone")
+            lines.append(f"{rec['title']}: no longer a trial in Sonarr (tag removed or series deleted) - left alone"
+                         + _qr_restore(c, rec, (rec.get("qr") or {}).get("item") if s and s.get("tvdbId") == rec["tvdb"] else None))
             continue
         if rec.get("override"):   # an admin (adriel / bobby) overruled the vote
             (keeps if rec["override"]["verdict"] == "keep" else drops).append((rec, s, f"overruled by {rec['override']['by']}"))

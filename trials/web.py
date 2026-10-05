@@ -11,7 +11,7 @@ from http import cookies
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import state as state_mod
-from .jobs import parse
+from .jobs import parse, trial_key
 
 CSS = """
 :root{--bg:#f6f5f2;--fg:#1d1d1f;--muted:#6b6b70;--card:#fff;--line:#e3e1dc;--up:#1f7a4d;--down:#b3261e;--accent:#3553c7}
@@ -60,10 +60,6 @@ def trials_view(cfg, c):
     movies = c.jellyfin.movie_index() if any(r.get("media") == "movie" for r in active) else {}
     rows = [(rec, (movies if rec.get("media") == "movie" else index).get(rec["path"].rstrip("/"))) for rec in active]
     return st, rows
-
-
-def trial_key(rec):
-    return f"movie:{rec['tmdb']}" if rec.get("media") == "movie" else str(rec["tvdb"])
 
 
 def nav(cfg, user, here):
