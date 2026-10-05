@@ -247,3 +247,25 @@ def test_sonarr_monitor_season_puts_only_that_season():
                        ("PUT", "http://s/api/v3/series/5"): (202, {})})
     Sonarr("http://s", "k", t).monitor_season(5, 1)
     assert [x["monitored"] for x in t.calls[-1][3]["seasons"]] == [False, True, False]
+
+
+def test_sonarr_add_tag_appends_once():
+    t = FakeTransport({("GET", "http://s/api/v3/series/5"): (200, {"id": 5, "tags": [3]}),
+                       ("PUT", "http://s/api/v3/series/5"): (202, {})})
+    sonarr = Sonarr("http://s", "k", t)
+    sonarr.add_tag(5, 1)
+    assert t.calls[-1][0] == "PUT" and t.calls[-1][3]["tags"] == [3, 1]
+    t.routes[("GET", "http://s/api/v3/series/5")] = (200, {"id": 5, "tags": [3, 1]})
+    sonarr.add_tag(5, 1)
+    assert [c[0] for c in t.calls] == ["GET", "PUT", "GET"]       # already tagged: no write
+
+
+def test_fakes_only_fake_methods_the_real_clients_have():
+    # FakeSonarr.add_tag existed while Sonarr.add_tag didn't, so a production crash passed every test
+    from trials.clients import Radarr
+    import fakes
+    helpers = {"add_existing", "add", "add_show"}
+    for fake, real in ((fakes.FakeSonarr, Sonarr), (fakes.FakeRadarr, Radarr), (fakes.FakeSeerr, Seerr),
+                       (fakes.FakeJellyfin, Jellyfin), (fakes.FakeNtfy, Ntfy)):
+        missing = {m for m in vars(fake) if not m.startswith("_") and callable(getattr(fake, m))} - helpers - set(dir(real))
+        assert not missing, f"{fake.__name__} fakes {missing}, which {real.__name__} lacks"

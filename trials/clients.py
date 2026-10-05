@@ -122,6 +122,12 @@ class Sonarr:
         self.set_monitored([e["id"] for e in self.episodes(sid) if e["seasonNumber"] > 0], True)
         self.http.call("POST", "/command", body={"name": "SeriesSearch", "seriesId": sid})
 
+    def add_tag(self, sid, tag_id):
+        s = self.get_series(sid)
+        if tag_id not in s["tags"]:
+            s["tags"].append(tag_id)
+            self.http.call("PUT", f"/series/{sid}", body=s)
+
     def remove_tag(self, sid, tag_id):
         s = self.get_series(sid)
         s["tags"] = [t for t in s["tags"] if t != tag_id]
