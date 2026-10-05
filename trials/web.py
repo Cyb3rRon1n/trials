@@ -111,7 +111,7 @@ def zip_dir(path):
 
 def _deadline(cfg, rec):
     if not rec.get("window_start"):
-        return "episodes on the way - voting opens when they arrive"
+        return "downloading - voting opens when it's here"
     end = parse(rec["window_start"]) + timedelta(days=cfg.window_days)
     days = max(0, (end - datetime.now(timezone.utc)).days)
     return f"vote by {end.strftime('%a %d %b')} ({days} day{'s' if days != 1 else ''} left)"
@@ -150,8 +150,8 @@ def render_page(cfg, c, user):
                      f'<div class="meta"><h2><a href="{pub}/web/#/details?id={iid}">{title}</a></h2>'
                      f'<small>{html.escape(_deadline(cfg, rec))}</small>{dry}<div>{buttons}{over}</div></div></div>')
     body = nav(cfg, user, "/") + (f'<h1>On Trial</h1><p class="lead">Hi {html.escape(user["name"])}. These are on a {cfg.window_days}-day trial: '
-            f'new shows with the first half of season 1, and requests the admins sent here. Vote to keep or drop them - '
-            'the majority of people who tried it decides. ♥ Favorite in Jellyfin counts as two 👍. If you watch but don\'t vote, finishing it counts as a keep. '
+            f'brand-new shows (all of season 1), new movies, and requests the admins sent here. Vote to keep each one '
+            'permanently (future seasons included) or drop it - the majority of people who tried it decides. ♥ Favorite in Jellyfin counts as two 👍. If you watch but don\'t vote, finishing it counts as a keep. '
             'The admins can overrule a result.</p>')
     body += "".join(cards) or '<p class="note">No shows on trial right now.</p>'
     if admin:

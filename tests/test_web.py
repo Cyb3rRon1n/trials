@@ -61,6 +61,7 @@ def test_list_escapes_and_vote_up(app):
     cookie = login(port, "bobby")
     body = req(port, "GET", "/", cookie=cookie)[2]
     assert "Plain &lt;Show&gt;" in body and "vote by" in body.lower()
+    assert "all of season 1" in body and "future seasons included" in body and "21-day" in body
     assert req(port, "POST", "/vote", {"item": "jf1", "value": "up"}, cookie)[0] == 303
     assert c.jellyfin.like[("jf1", "u2")] is True
 
