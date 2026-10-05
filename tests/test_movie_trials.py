@@ -146,3 +146,16 @@ def test_never_arrived_movie_is_soft_dropped_and_can_come_back_later(tmp_path):
     assert rec["status"] == "unavailable" and rec["dropped_at"] == iso(later) and st.get("rejected_movies", []) == []
     assert 1 in _skip_set(st, later + timedelta(days=29), movies=True)
     assert 1 not in _skip_set(st, later + timedelta(days=31), movies=True)
+
+
+def test_requests_adopted_this_week_dont_use_up_weekly_slots(tmp_path):
+    cfg, c, st = world(tmp_path, movies_per_week=1, trials_per_week=1)
+    st["shows"]["movie:9"] = {"tmdb": 9, "media": "movie", "kind": "request", "added_at": iso(NOW), "status": "active"}
+    st["shows"]["7001"] = {"tvdb": 7001, "media": "tv", "kind": "request", "added_at": iso(NOW), "status": "active"}
+    c.seerr.add_film(1, "Fresh")
+    c.seerr.add_show(5, 1005, "Plain Show")
+    c.sonarr.lookups[1005] = {"title": "Plain Show", "tvdbId": 1005}
+    from trials.jobs import weekly_add
+    weekly_add(cfg, c, st, NOW)
+    weekly_add_movies(cfg, c, st, NOW)
+    assert "1005" in st["shows"] and "movie:1" in st["shows"]

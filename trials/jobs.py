@@ -211,8 +211,9 @@ def affinity(genre_names, prof):
 
 
 def _added_this_week(st, now, movies):
+    """weekly picks already made this week (requests the admins sent in don't use up a slot)"""
     week = now.strftime("%G-W%V")
-    return sum(1 for rec in st["shows"].values() if is_movie(rec) == movies
+    return sum(1 for rec in st["shows"].values() if is_movie(rec) == movies and not is_request(rec)
                and rec.get("added_at") and parse(rec["added_at"]).strftime("%G-W%V") == week)
 
 
