@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from trials.config import Config
 
 
@@ -36,8 +36,10 @@ class FakeSonarr:
         s = dict(lookup, id=sid, path=f"{root}/{lookup['title']}", tags=[tag_id], rootFolderPath=root,
                  seriesType=series_type)
         self.series_db[sid] = s
-        self.eps[sid] = [{"id": sid * 100 + i, "seasonNumber": 1, "episodeNumber": i,
-                          "monitored": False, "hasFile": False} for i in range(1, 7)]
+        # E01-E04 have aired (E04 today), E05-E06 air over the next two weeks
+        self.eps[sid] = [{"id": sid * 100 + i, "seasonNumber": 1, "episodeNumber": i, "monitored": False, "hasFile": False,
+                          "airDateUtc": (NOW + timedelta(days=7 * (i - 4))).strftime("%Y-%m-%dT%H:%M:%SZ")}
+                         for i in range(1, 7)]
         self.calls.append(("add", sid))
         return dict(s)
 
@@ -48,6 +50,9 @@ class FakeSonarr:
 
     def episodes(self, sid):
         return [dict(e) for e in self.eps.get(sid, [])]
+
+    def monitor_season(self, sid, season):
+        self.calls.append(("monitor_season", sid, season))
 
     def set_monitored(self, ids, monitored):
         for eps in self.eps.values():
@@ -169,11 +174,15 @@ class FakeSeerr:
     def __init__(self):
         self.trending, self.details, self.requested = [], {}, set()
 
-    def add_show(self, tmdb, tvdb, name, last=(1, 8), genres=("Drama",), origin=("US",), s1_eps=6):
+    def add_show(self, tmdb, tvdb, name, last=(1, 4), genres=("Drama",), origin=("US",), s1_eps=6,
+                 premiered_days_ago=10, seasons=1):
+        """defaults: a brand-new show - one season, premiered 10 days ago, 4 episodes out"""
         self.trending.append({"id": tmdb, "mediaType": "tv", "name": name})
         self.details[tmdb] = {"id": tmdb, "name": name, "externalIds": {"tvdbId": tvdb},
-                              "lastEpisodeToAir": {"seasonNumber": last[0], "episodeNumber": last[1]},
-                              "seasons": [{"seasonNumber": 1, "episodeCount": s1_eps}],
+                              "firstAirDate": (NOW - timedelta(days=premiered_days_ago)).strftime("%Y-%m-%d"),
+                              "lastEpisodeToAir": {"seasonNumber": last[0], "episodeNumber": last[1]} if last else None,
+                              "seasons": [{"seasonNumber": 0, "episodeCount": 2}] +
+                                         [{"seasonNumber": n, "episodeCount": s1_eps} for n in range(1, seasons + 1)],
                               "genres": [{"name": g} for g in genres], "originCountry": list(origin)}
 
     def trending_tv(self, pages=3):

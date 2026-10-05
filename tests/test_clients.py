@@ -238,3 +238,12 @@ def test_jellyfin_clear_trial_note_restores_and_unlocks():
     Jellyfin("http://j", "K", t).set_trial_note("i1", "u1", None)
     body = t.calls[-1][3]
     assert body["Overview"] == "Real synopsis." and body["LockedFields"] == ["Name"]
+
+
+def test_sonarr_monitor_season_puts_only_that_season():
+    t = FakeTransport({("GET", "http://s/api/v3/series/5"): (200, {"id": 5, "seasons": [
+                           {"seasonNumber": 0, "monitored": False}, {"seasonNumber": 1, "monitored": False},
+                           {"seasonNumber": 2, "monitored": False}]}),
+                       ("PUT", "http://s/api/v3/series/5"): (202, {})})
+    Sonarr("http://s", "k", t).monitor_season(5, 1)
+    assert [x["monitored"] for x in t.calls[-1][3]["seasons"]] == [False, True, False]

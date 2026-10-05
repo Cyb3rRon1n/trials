@@ -85,12 +85,31 @@ def trial_n(cfg, rec):
     return rec.get("trial_n", cfg.trial_episodes)
 
 
-def aired_enough(details):
-    """the first half of season 1 is out (Seerr lists the season's full planned length)"""
-    count = next((x.get("episodeCount") or 0 for x in details.get("seasons") or [] if x.get("seasonNumber") == 1), 0)
+def recent(date, now, days):
+    """`date` (a Seerr/TMDb date or timestamp) falls within the last `days` days and isn't in the future"""
+    if not date:
+        return False
+    d = parse(date)
+    d = d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+    return now - timedelta(days=days) <= d <= now
+
+
+def brand_new(details, now, days):
+    """weekly picks are brand-new shows: one season (specials aside), premiered in the last
+    `days` days, and at least one episode already out"""
+    seasons = [x for x in details.get("seasons") or [] if (x.get("seasonNumber") or 0) > 0]
     last = details.get("lastEpisodeToAir") or {}
-    season, episode = last.get("seasonNumber") or 0, last.get("episodeNumber") or 0
-    return count > 0 and (season > 1 or (season == 1 and episode >= half_season(count)))
+    return (len(seasons) == 1 and recent(details.get("firstAirDate"), now, days)
+            and last.get("seasonNumber") == 1 and (last.get("episodeNumber") or 0) >= 1)
+
+
+def is_season(rec):
+    """whole-season trial (weekly picks since whole-season trials); older trials have a fixed E01-0n"""
+    return rec.get("trial_mode") == "season"
+
+
+def aired(e, now):
+    return bool(e.get("airDateUtc")) and parse(e["airDateUtc"]) <= now
 
 
 def trial_eps(episodes, n):
@@ -111,6 +130,27 @@ def setup_trial(c, rec, episodes):
     rec["known_episode_ids"] = sorted(e["id"] for e in episodes)
     rec["setup_done"] = True
     return True
+
+
+def setup_season(c, rec, episodes, now):
+    """the whole of season 1 is on trial: all of it monitored (so episodes airing during the trial
+    download too), later seasons left off, and the aired ones searched now"""
+    s1 = [e for e in episodes if e["seasonNumber"] == 1]
+    if not s1:
+        rec["setup_done"] = False
+        return False
+    sid, ids = rec["sonarr_id"], {e["id"] for e in s1}
+    c.sonarr.set_monitored([e["id"] for e in episodes if e["id"] not in ids], False)
+    c.sonarr.monitor_season(sid, 1)   # season-level, so S1 episodes listed later get monitored too
+    c.sonarr.set_monitored(sorted(ids), True)
+    c.sonarr.search_episodes([e["id"] for e in s1 if aired(e, now)])
+    rec["known_episode_ids"] = sorted(e["id"] for e in episodes)
+    rec["setup_done"] = True
+    return True
+
+
+def _setup(c, rec, episodes, now):
+    return setup_season(c, rec, episodes, now) if is_season(rec) else setup_trial(c, rec, episodes)
 
 
 def _notify_jellyfin(c, created=(), deleted=()):
@@ -192,7 +232,7 @@ def weekly_add(cfg, c, st, now, lines=None):
     for rank, item in enumerate(pool):
         det = c.seerr.tv(item["id"])
         tvdb = (det.get("externalIds") or {}).get("tvdbId")
-        if not tvdb or tvdb in skip or not aired_enough(det):
+        if not tvdb or tvdb in skip or not brand_new(det, now, cfg.new_days):
             continue
         ranked.append((affinity([g["name"] for g in det.get("genres") or []], prof), rank, item, det, tvdb))
     # half taste match, half trending position - so it stays "what's new" and not just "what's big"
@@ -212,10 +252,10 @@ def weekly_add(cfg, c, st, now, lines=None):
         rec = st["shows"][str(tvdb)] = {
             "tvdb": tvdb, "tmdb": item["id"], "title": s["title"], "sonarr_id": s["id"], "path": s["path"],
             "added_at": iso(now), "window_start": None, "status": "active", "dest": dest,
-            "played": None, "setup_done": False, "dry_run": None}
+            "played": None, "setup_done": False, "dry_run": None, "trial_mode": "season"}
         skip.add(tvdb)
-        setup_trial(c, rec, c.sonarr.episodes(s["id"]))
-        lines.append(f"trial added: {s['title']} (S01E01-E{trial_n(cfg, rec):02d}) -> Trials library")
+        setup_season(c, rec, c.sonarr.episodes(s["id"]), now)
+        lines.append(f"trial added: {s['title']} (season 1) -> Trials library")
         added += 1
     return lines
 
@@ -234,7 +274,9 @@ def _mark_on_trial(cfg, c, rec, jf_id, users, lines):
 
 
 def user_extended(rec, episodes, n):
-    trial = {e["id"] for e in trial_eps(episodes, n)}
+    """someone monitored more than the trial in Sonarr (for a whole-season trial: a later season)"""
+    season1 = [e for e in episodes if e["seasonNumber"] == 1]
+    trial = {e["id"] for e in (season1 if is_season(rec) else trial_eps(episodes, n))}
     known = set(rec.get("known_episode_ids") or [])
     return any(e.get("monitored") and e["id"] not in trial and e["id"] in known for e in episodes)
 
@@ -482,7 +524,7 @@ def daily_decide(cfg, c, st, now, lines=None):
         eps = c.sonarr.episodes(s["id"])
         just_searched = False
         if not rec.get("setup_done"):
-            just_searched = setup_trial(c, rec, eps)
+            just_searched = _setup(c, rec, eps, now)
             eps = c.sonarr.episodes(s["id"])
         n = cfg.trial_episodes if is_request(rec) else trial_n(cfg, rec)
         if not is_request(rec) and (c.seerr.requested_since(rec["tmdb"], rec["added_at"]) or user_extended(rec, eps, n)):

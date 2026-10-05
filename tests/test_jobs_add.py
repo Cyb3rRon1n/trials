@@ -13,7 +13,7 @@ def test_adds_top_n_eligible_and_skips_the_rest(tmp_path):
     cfg, c, st = setup(tmp_path, trials_per_week=2)
     c.seerr.add_show(1, 1001, "Already Have")          # already in Sonarr
     c.seerr.add_show(2, 1002, "Was Rejected")
-    c.seerr.add_show(3, 1003, "Too New", last=(1, 2))   # only 2 aired
+    c.seerr.add_show(3, 1003, "Old News", premiered_days_ago=400)
     c.seerr.add_show(4, 1004, "Anime One", genres=("Animation",), origin=("JP",))
     c.seerr.add_show(5, 1005, "Plain Show")
     c.seerr.add_show(6, 1006, "Third Eligible")
@@ -28,12 +28,9 @@ def test_adds_top_n_eligible_and_skips_the_rest(tmp_path):
     rec = st["shows"]["1004"]
     assert rec["status"] == "active" and rec["dest"] == "/data/media/anime" and rec["window_start"] is None
     assert rec["path"] == "/data/media/trials/Anime One" and rec["setup_done"] is True
+    assert rec["trial_mode"] == "season" and "trial_n" not in rec
     assert st["shows"]["1005"]["dest"] == "/data/media/tv"
-    sid = rec["sonarr_id"]
-    mon = {e["episodeNumber"]: e["monitored"] for e in c.sonarr.eps[sid]}
-    assert [n for n, m in mon.items() if m] == [1, 2, 3]
-    assert ("search", (sid * 100 + 1, sid * 100 + 2, sid * 100 + 3)) in c.sonarr.calls
-    assert len(lines) == 2 and "Anime One" in lines[0]
+    assert len(lines) == 2 and lines[0] == "trial added: Anime One (season 1) -> Trials library"
 
 
 def test_skips_shows_already_in_state(tmp_path):
@@ -107,7 +104,7 @@ def test_picks_follow_what_users_watch_like_and_favorite(tmp_path):
     c.jellyfin.taste = {"u1": [{"Type": "Series", "Genres": ["Crime"], "UserData": {"IsFavorite": True}},
                                {"Type": "Series", "Genres": ["Comedy"], "UserData": {"Likes": False, "Played": True}}]}
     lines = weekly_add(cfg, c, state.empty(), NOW)
-    assert lines == ["trial added: Crime Drama (S01E01-E03) -> Trials library"]
+    assert lines == ["trial added: Crime Drama (season 1) -> Trials library"]
 
 
 def test_genre_names_normalise():
@@ -115,14 +112,36 @@ def test_genre_names_normalise():
     assert genres_of(["Sci-Fi & Fantasy", "Action & Adventure"]) == {"science fiction", "fantasy", "action", "adventure"}
 
 
-def test_trial_is_first_half_of_season_1_rounded_up():
-    from trials.jobs import aired_enough, half_season
-    assert [half_season(n) for n in (1, 2, 7, 12, 24)] == [1, 1, 4, 6, 12]
-    det = {"seasons": [{"seasonNumber": 1, "episodeCount": 12}], "lastEpisodeToAir": {"seasonNumber": 1, "episodeNumber": 5}}
-    assert not aired_enough(det)
-    det["lastEpisodeToAir"]["episodeNumber"] = 6
-    assert aired_enough(det)
-    assert not aired_enough({"lastEpisodeToAir": {"seasonNumber": 2, "episodeNumber": 1}})   # no season info
+def test_only_brand_new_shows_are_picked(tmp_path):
+    cfg, c, st = setup(tmp_path, trials_per_week=10)
+    c.seerr.add_show(1, 1001, "Old Show", premiered_days_ago=45)
+    c.seerr.add_show(2, 1002, "Second Season", seasons=2)
+    c.seerr.add_show(3, 1003, "Not Out Yet", premiered_days_ago=-3, last=None)
+    c.seerr.add_show(4, 1004, "Premiere Pending", last=None)         # dated, but no episode has aired
+    c.seerr.add_show(5, 1005, "Ten Days Old")
+    for tvdb in range(1001, 1006):
+        c.sonarr.lookups[tvdb] = {"title": f"show {tvdb}", "tvdbId": tvdb}
+    weekly_add(cfg, c, st, NOW)
+    assert sorted(st["shows"]) == ["1005"]
+
+
+def test_whole_season_1_is_monitored_and_aired_episodes_searched(tmp_path):
+    cfg, c, st = setup(tmp_path)
+    c.seerr.add_show(5, 1005, "Plain Show")
+    c.sonarr.lookups[1005] = {"title": "Plain Show", "tvdbId": 1005}
+    real_add = c.sonarr.add_series
+
+    def add_with_s2(*a, **kw):
+        s = real_add(*a, **kw)
+        c.sonarr.eps[s["id"]].append({"id": 9999, "seasonNumber": 2, "episodeNumber": 1, "monitored": True, "hasFile": False})
+        return s
+    c.sonarr.add_series = add_with_s2
+    weekly_add(cfg, c, st, NOW)
+    sid = st["shows"]["1005"]["sonarr_id"]
+    mon = {(e["seasonNumber"], e["episodeNumber"]): e["monitored"] for e in c.sonarr.eps[sid]}
+    assert [k for k, m in mon.items() if m] == [(1, n) for n in range(1, 7)]       # S2 stays off
+    assert ("monitor_season", sid, 1) in c.sonarr.calls                           # later S1 listings too
+    assert ("search", tuple(sid * 100 + i for i in range(1, 5))) in c.sonarr.calls   # E05-06 not aired yet
 
 
 def test_movie_trial_in_state_does_not_break_the_show_add(tmp_path):

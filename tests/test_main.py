@@ -59,9 +59,9 @@ def test_run_job_failure_still_reports_completed_actions(tmp_path):
     st = state.empty()
 
     # Add two shows
-    c.seerr.add_show(5, 1005, "Keep Show")
+    c.seerr.add_show(5, 1005, "Keep Show", premiered_days_ago=40)
     c.sonarr.lookups[1005] = {"title": "Keep Show", "tvdbId": 1005}
-    c.seerr.add_show(6, 1006, "Reject Show")
+    c.seerr.add_show(6, 1006, "Reject Show", premiered_days_ago=40)
     c.sonarr.lookups[1006] = {"title": "Reject Show", "tvdbId": 1006}
 
     # Add both via weekly_add
