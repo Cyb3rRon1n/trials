@@ -179,3 +179,12 @@ def test_deep_link_ignores_junk(app):
     assert status == 200 and "<script>" not in body and 'name="t"' not in body
     status, loc, _, _ = where(port, "POST", "/login", {"username": "bobby", "password": "pw", "t": "//evil.example"})
     assert loc == "/"
+
+
+def test_session_cookie_is_lax_so_a_scanned_qr_link_arrives_signed_in(app):
+    # Strict cookies aren't sent when a phone's camera app opens the link (a cross-site navigation),
+    # so every scan would ask for the password again. Lax still withholds them from cross-site POSTs
+    # (every action here is a POST), which is what stops CSRF.
+    _, _, port = app
+    cookie = req(port, "POST", "/login", {"username": "bobby", "password": "pw"})[1]
+    assert "SameSite=Lax" in cookie and "HttpOnly" in cookie and "Secure" in cookie

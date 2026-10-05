@@ -239,7 +239,7 @@ def make_server(cfg, c, host="0.0.0.0", port=None, on_override=None):
                 token = secrets.token_urlsafe(24)
                 with lock:
                     sessions[token] = user
-                return self._redirect([("Set-Cookie", f"trials_session={token}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=2592000")],
+                return self._redirect([("Set-Cookie", f"trials_session={token}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=2592000")],
                                       to=f"/#t-{t}" if t else "/")
             user = self._user()
             if not user:
