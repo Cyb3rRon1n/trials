@@ -341,6 +341,7 @@ def test_indexes_also_ask_the_trials_library_directly():
     # live Jellyfin 12: the global recursive query leaves out the movies in the mixed "On Trial"
     # library; asking that library by ParentId finds them
     t = FakeTransport({
+        ("GET", "http://j/Users"): (200, [{"Id": "u1", "Name": "adriel"}]),
         ("GET", "http://j/Items?ParentId=L1"): (200, {"Items": [
             {"Id": "m9", "Path": "/data/media/trials/Trial Film (2026)/Trial Film.mkv"},
             {"Id": "s9", "Path": "/data/media/trials/Trial Show"}]}),
@@ -365,3 +366,32 @@ def test_build_clients_tells_jellyfin_the_trials_roots(tmp_path):
     from fakes import make_cfg
     c = build_clients(make_cfg(tmp_path, trials_root="/data/media/trials", trials_movies_root="/data/media/trial-movies"))
     assert set(c.jellyfin.roots) == {"/data/media/trials", "/data/media/trial-movies"}
+
+
+def test_trials_library_query_is_made_as_a_user():
+    # live: a movie attached to a stale physical "trials" Folder only shows up in the ParentId query
+    # when it's asked with a userId; the global query stays as it was
+    t = FakeTransport({
+        ("GET", "http://j/Users"): (200, [{"Id": "u1", "Name": "adriel"}, {"Id": "u2", "Name": "bobby"}]),
+        ("GET", "http://j/Items?ParentId=L1&userId=u1"): (200, {"Items": [
+            {"Id": "m1", "Path": "/data/media/trials/Lion Fist (2026)/Lion Fist.mkv"},
+            {"Id": "m3", "Path": "/data/media/trials/The End of Oak Street (2026)/x.mkv"}]}),
+        ("GET", "http://j/Items?ParentId=L1"): (200, {"Items": [
+            {"Id": "m1", "Path": "/data/media/trials/Lion Fist (2026)/Lion Fist.mkv"}]}),
+        ("GET", "http://j/Items?"): (200, {"Items": []}),
+        ("GET", "http://j/Library/VirtualFolders"): (200, [{"ItemId": "L1", "Locations": ["/data/media/trials"]}]),
+    })
+    j = Jellyfin("http://j", "K", t, roots=("/data/media/trials",))
+    assert "/data/media/trials/The End of Oak Street (2026)" in j.movie_index()
+    assert [u for _, u, _, _ in t.calls if "Items?Recursive" in u and "userId" in u] == []       # global unchanged
+    assert len([u for _, u, _, _ in t.calls if u.endswith("/Users")]) == 1
+
+
+def test_trials_library_query_without_users_still_works():
+    t = FakeTransport({
+        ("GET", "http://j/Users"): (200, []),
+        ("GET", "http://j/Items?ParentId=L1"): (200, {"Items": [{"Id": "m1", "Path": "/data/media/trials/A (2026)/a.mkv"}]}),
+        ("GET", "http://j/Items?"): (200, {"Items": []}),
+        ("GET", "http://j/Library/VirtualFolders"): (200, [{"ItemId": "L1", "Locations": ["/data/media/trials"]}]),
+    })
+    assert "/data/media/trials/A (2026)" in Jellyfin("http://j", "K", t, roots=("/data/media/trials",)).movie_index()
