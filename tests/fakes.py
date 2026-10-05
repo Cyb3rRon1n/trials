@@ -182,7 +182,9 @@ class FakeSeerr:
                               "firstAirDate": (NOW - timedelta(days=premiered_days_ago)).strftime("%Y-%m-%d"),
                               "lastEpisodeToAir": {"seasonNumber": last[0], "episodeNumber": last[1]} if last else None,
                               "seasons": [{"seasonNumber": 0, "episodeCount": 2}] +
-                                         [{"seasonNumber": n, "episodeCount": s1_eps} for n in range(1, seasons + 1)],
+                                         [{"seasonNumber": n, "episodeCount": s1_eps,
+                                           "airDate": (NOW - timedelta(days=premiered_days_ago)).strftime("%Y-%m-%d")}
+                                          for n in range(1, seasons + 1)],
                               "genres": [{"name": g} for g in genres], "originCountry": list(origin)}
 
     def add_film(self, tmdb, title, digital_days_ago=10, physical_days_ago=None, genres=("Drama",), popular=False):

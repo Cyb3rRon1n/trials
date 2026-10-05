@@ -151,3 +151,16 @@ def test_movie_trial_in_state_does_not_break_the_show_add(tmp_path):
     c.sonarr.lookups[1005] = {"title": "Plain Show", "tvdbId": 1005}
     weekly_add(cfg, c, st, NOW)
     assert "1005" in st["shows"]
+
+
+def test_renewed_show_qualifies_until_its_next_season_airs(tmp_path):
+    cfg, c, st = setup(tmp_path, trials_per_week=10)
+    c.seerr.add_show(1, 1001, "Renewed, S2 Dated", seasons=2)
+    c.seerr.details[1]["seasons"][2]["airDate"] = "2027-03-01"
+    c.seerr.add_show(2, 1002, "Renewed, S2 Undated", seasons=2)
+    c.seerr.details[2]["seasons"][2]["airDate"] = None
+    c.seerr.add_show(3, 1003, "S2 Already Aired", seasons=2)      # both seasons dated 10 days ago
+    for tvdb in (1001, 1002, 1003):
+        c.sonarr.lookups[tvdb] = {"title": f"show {tvdb}", "tvdbId": tvdb}
+    weekly_add(cfg, c, st, NOW)
+    assert sorted(st["shows"]) == ["1001", "1002"]

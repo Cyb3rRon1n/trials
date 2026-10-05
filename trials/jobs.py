@@ -87,17 +87,20 @@ def trial_n(cfg, rec):
 
 def recent(date, now, days):
     """`date` (a Seerr/TMDb date or timestamp) falls within the last `days` days and isn't in the future"""
-    if not date:
-        return False
+    return bool(date) and now - timedelta(days=days) <= _day(date) <= now
+
+
+def _day(date):
+    """a Seerr/TMDb date ("2026-09-25") or timestamp, as an aware datetime"""
     d = parse(date)
-    d = d if d.tzinfo else d.replace(tzinfo=timezone.utc)
-    return now - timedelta(days=days) <= d <= now
+    return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
 
 
 def brand_new(details, now, days):
-    """weekly picks are brand-new shows: one season (specials aside), premiered in the last
-    `days` days, and at least one episode already out"""
-    seasons = [x for x in details.get("seasons") or [] if (x.get("seasonNumber") or 0) > 0]
+    """weekly picks are brand-new shows: one season that has started airing (specials aside; an
+    announced season 2 is fine), premiered in the last `days` days, and at least one episode out"""
+    seasons = [x for x in details.get("seasons") or [] if (x.get("seasonNumber") or 0) >= 1
+               and x.get("airDate") and _day(x["airDate"]) <= now]
     last = details.get("lastEpisodeToAir") or {}
     return (len(seasons) == 1 and recent(details.get("firstAirDate"), now, days)
             and last.get("seasonNumber") == 1 and (last.get("episodeNumber") or 0) >= 1)
