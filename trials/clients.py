@@ -277,9 +277,9 @@ class Jellyfin:
 
     def set_image(self, item_id, image_type, data, ctype="image/jpeg"):
         """make `data` the item's first image of this type (body is base64, Jellyfin's quirk). An upload
-        APPENDS a backdrop (ImageSaver: index = count), so it's moved to the front and the old first one
-        (now index 1) deleted - in that order, so a failure part-way leaves an extra backdrop, never none.
-        Other backdrops stay as they were."""
+        APPENDS a backdrop (ImageSaver: index = count), so it's swapped to the front (the reorder endpoint
+        SWAPS) and the old first one, now last, deleted - in that order, so a failure part-way leaves an
+        extra backdrop, never none. Other backdrops keep their places."""
         body = base64.b64encode(data)
         if image_type != "Backdrop":
             self.http.raw("POST", f"/Items/{item_id}/Images/{image_type}", data=body, ctype=ctype)
@@ -288,7 +288,7 @@ class Jellyfin:
         self.http.raw("POST", f"/Items/{item_id}/Images/Backdrop", data=body, ctype=ctype)
         if n:
             self.http.call("POST", f"/Items/{item_id}/Images/Backdrop/{n}/Index", {"newIndex": 0})
-            self.http.call("DELETE", f"/Items/{item_id}/Images/Backdrop/1")
+            self.http.call("DELETE", f"/Items/{item_id}/Images/Backdrop/{n}")
 
     def notify_paths(self, created=(), deleted=()):
         ups = [{"Path": p, "UpdateType": "Created"} for p in created] + \

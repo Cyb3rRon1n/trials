@@ -309,14 +309,15 @@ def test_jellyfin_get_image_returns_bytes_or_none():
 def test_jellyfin_set_image_replaces_the_first_backdrop():
     import base64
     t = FakeTransport({("GET", "http://j/Items/i1"): (200, {"Id": "i1", "BackdropImageTags": ["a", "b"]}),
-                       ("DELETE", "http://j/Items/i1/Images/Backdrop/1"): (204, None),
+                       ("DELETE", "http://j/Items/i1/Images/Backdrop/2"): (204, None),
                        ("POST", "http://j/Items/i1/Images/Backdrop"): (204, None)})
     Jellyfin("http://j", "K", t).set_image("i1", "Backdrop", b"NEW")
     calls = [(m, u.split("http://j")[1]) for m, u, _, _ in t.calls]
-    # upload appends (Jellyfin ImageSaver: index = count), so: upload, move it to the front, then drop the
-    # old first one (now index 1) - a failure part-way leaves an extra backdrop, never none
+    # upload appends (Jellyfin ImageSaver: index = count), so: upload, swap it to the front (the Index
+    # endpoint calls SwapImagesAsync), then drop the old first one, now last - a failure part-way
+    # leaves an extra backdrop, never none
     assert calls == [("GET", "/Items/i1"), ("POST", "/Items/i1/Images/Backdrop"),
-                     ("POST", "/Items/i1/Images/Backdrop/2/Index?newIndex=0"), ("DELETE", "/Items/i1/Images/Backdrop/1")]
+                     ("POST", "/Items/i1/Images/Backdrop/2/Index?newIndex=0"), ("DELETE", "/Items/i1/Images/Backdrop/2")]
     upload = t.calls[1]
     assert upload[3] == base64.b64encode(b"NEW") and upload[2]["Content-Type"] == "image/jpeg"
 
