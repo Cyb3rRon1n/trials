@@ -308,7 +308,11 @@ def test_jellyfin_get_image_returns_bytes_or_none():
 
 def test_jellyfin_set_image_replaces_the_first_backdrop():
     import base64
-    t = FakeTransport({("GET", "http://j/Items/i1"): (200, {"Id": "i1", "BackdropImageTags": ["a", "b"]}),
+    # live Jellyfin 12: a bare GET /Items/{id} is HTTP 400 under API-key auth; /Images lists them
+    t = FakeTransport({("GET", "http://j/Items/i1/Images"): (200, [
+                           {"ImageType": "Primary", "ImageIndex": 0}, {"ImageType": "Backdrop", "ImageIndex": 0},
+                           {"ImageType": "Backdrop", "ImageIndex": 1}]),
+                       ("GET", "http://j/Items/i1"): (400, b"Error processing request."),
                        ("DELETE", "http://j/Items/i1/Images/Backdrop/2"): (204, None),
                        ("POST", "http://j/Items/i1/Images/Backdrop"): (204, None)})
     Jellyfin("http://j", "K", t).set_image("i1", "Backdrop", b"NEW")
@@ -316,18 +320,18 @@ def test_jellyfin_set_image_replaces_the_first_backdrop():
     # upload appends (Jellyfin ImageSaver: index = count), so: upload, swap it to the front (the Index
     # endpoint calls SwapImagesAsync), then drop the old first one, now last - a failure part-way
     # leaves an extra backdrop, never none
-    assert calls == [("GET", "/Items/i1"), ("POST", "/Items/i1/Images/Backdrop"),
+    assert calls == [("GET", "/Items/i1/Images"), ("POST", "/Items/i1/Images/Backdrop"),
                      ("POST", "/Items/i1/Images/Backdrop/2/Index?newIndex=0"), ("DELETE", "/Items/i1/Images/Backdrop/2")]
     upload = t.calls[1]
     assert upload[3] == base64.b64encode(b"NEW") and upload[2]["Content-Type"] == "image/jpeg"
 
 
 def test_jellyfin_set_image_primary_and_first_backdrop():
-    t = FakeTransport({("GET", "http://j/Items/i1"): (200, {"Id": "i1", "BackdropImageTags": []}),
+    t = FakeTransport({("GET", "http://j/Items/i1/Images"): (200, [{"ImageType": "Primary", "ImageIndex": 0}]),
                        ("POST", "http://j/Items/i1/Images/"): (204, None)})
     j = Jellyfin("http://j", "K", t)
     j.set_image("i1", "Primary", b"P", "image/png")
     j.set_image("i1", "Backdrop", b"B")
     calls = [(m, u.split("http://j")[1]) for m, u, _, _ in t.calls]
-    assert calls == [("POST", "/Items/i1/Images/Primary"), ("GET", "/Items/i1"), ("POST", "/Items/i1/Images/Backdrop")]
+    assert calls == [("POST", "/Items/i1/Images/Primary"), ("GET", "/Items/i1/Images"), ("POST", "/Items/i1/Images/Backdrop")]
     assert t.calls[0][2]["Content-Type"] == "image/png"
