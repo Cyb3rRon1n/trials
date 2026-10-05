@@ -307,18 +307,24 @@ def _taste(users, views):
             if v.likes is not None or v.favorite}
 
 
-def request_views(c, jf_id, users, n):
-    """whole-request show: any episode counts; no vote + finished min(n, available) episodes = keep"""
+def like_threshold(n, available):
+    """no vote: finishing this many episodes counts as a like (n, or all there is if fewer)"""
+    return max(1, min(n, available))
+
+
+def request_views(c, jf_id, users, n, season1=False):
+    """whole request / whole season 1: any episode counts; no vote + finished like_threshold() episodes = keep"""
     views, snapshot, total = [], {}, 0
+    fetch = c.jellyfin.season1_episodes if season1 else c.jellyfin.all_episodes
     for u in users:
-        eps = [e for e in c.jellyfin.all_episodes(jf_id, u["Id"]) if e.get("IndexNumber") is not None]
+        eps = [e for e in fetch(jf_id, u["Id"]) if e.get("IndexNumber") is not None]
         total = max(total, len(eps))
         data = [(e, e.get("UserData") or {}) for e in eps]
         watched = sum(1 for _, d in data if d.get("Played") or (d.get("PlaybackPositionTicks") or 0) > 0)
         finished = sum(1 for _, d in data if d.get("Played"))
         views.append(UserView(c.jellyfin.likes(jf_id, u["Id"]), watched, finished, c.jellyfin.favorite(jf_id, u["Id"])))
         snapshot[u["Id"]] = {ep_key(e.get("ParentIndexNumber") or 0, e["IndexNumber"]): _hist(d) for e, d in data}
-    return views, snapshot, max(1, min(n, total))
+    return views, snapshot, like_threshold(n, total)
 
 
 def movie_views(c, jf_id, users):
@@ -384,8 +390,8 @@ def apply_keep(cfg, c, rec, s, tag, index, users, now, why):
     if jf:
         if is_movie(rec):
             views, rec["played"] = movie_views(c, jf["Id"], users)
-        elif is_request(rec):
-            views, rec["played"], _ = request_views(c, jf["Id"], users, cfg.trial_episodes)
+        elif is_request(rec) or is_season(rec):
+            views, rec["played"], _ = request_views(c, jf["Id"], users, cfg.trial_episodes, is_season(rec))
         else:
             views, rec["played"] = user_views(c, jf["Id"], users, trial_n(cfg, rec))
         rec["taste"] = _taste(users, views)
@@ -429,22 +435,31 @@ def _open_window(cfg, c, rec, jf_id, users, now, lines, why="arrived"):
     _mark_on_trial(cfg, c, rec, jf_id, users, lines)
 
 
-def _request_arrival(cfg, c, rec, s, eps, index, users, now, lines):
-    """a whole request opens for voting once every aired, monitored episode is in - or after
-    arrival_days with whatever arrived. Never dropped for being slow: it was asked for."""
-    aired = [e for e in eps if e.get("monitored") and e["seasonNumber"] > 0
-             and e.get("airDateUtc") and parse(e["airDateUtc"]) <= now]
-    have = [e for e in aired if e["hasFile"]]
-    late = bool(have) and now - parse(rec["added_at"]) > timedelta(days=cfg.arrival_days)
+def _arrival(cfg, c, rec, s, eps, index, users, now, lines, just_searched=False):
+    """a whole request / whole season 1 opens for voting once every aired episode is in - or after
+    arrival_days with whatever arrived. Returns True when that's nothing at all: a weekly pick is then
+    dropped; a request never is for being slow (it was asked for)."""
+    if is_season(rec):
+        out = [e for e in eps if e["seasonNumber"] == 1 and aired(e, now)]
+    else:
+        out = [e for e in eps if e.get("monitored") and e["seasonNumber"] > 0 and aired(e, now)]
+    have = [e for e in out if e["hasFile"]]
+    overdue = now - parse(rec["added_at"]) > timedelta(days=cfg.arrival_days)
     jf = index.get(s["path"].rstrip("/"))
-    if aired and len(have) == len(aired) or late:
-        if jf:
-            _open_window(cfg, c, rec, jf["Id"], users, now, lines,
-                         "request arrived" if len(have) == len(aired) else f"{len(have)}/{len(aired)} episodes arrived")
-        else:
+    if out and len(have) == len(out) or overdue and have:
+        if not jf:
             lines.append(f"{rec['title']}: files present but Jellyfin hasn't indexed {s['path']} yet - waiting")
-    elif have != aired:
-        c.sonarr.search_episodes([e["id"] for e in aired if not e["hasFile"]])
+        elif len(have) == len(out):
+            _open_window(cfg, c, rec, jf["Id"], users, now, lines, "trial episodes arrived" if is_season(rec) else "request arrived")
+        else:
+            _open_window(cfg, c, rec, jf["Id"], users, now, lines, f"{len(have)}/{len(out)} episodes arrived")
+        return False
+    if overdue and is_season(rec):
+        return True
+    if have != out and not just_searched:
+        # aired episodes never come back via RSS, so retry the missing ones daily
+        c.sonarr.search_episodes([e["id"] for e in out if not e["hasFile"]])
+    return False
 
 
 def _decide_movie(cfg, c, rec, movies, movie_index, mtag, users, now, keeps, drops, lines):
@@ -530,8 +545,9 @@ def daily_decide(cfg, c, st, now, lines=None):
         if not is_request(rec) and (c.seerr.requested_since(rec["tmdb"], rec["added_at"]) or user_extended(rec, eps, n)):
             keeps.append((rec, s, "requested by a user"))
             continue
-        if rec["window_start"] is None and is_request(rec):
-            _request_arrival(cfg, c, rec, s, eps, index, users, now, lines)
+        if rec["window_start"] is None and (is_request(rec) or is_season(rec)):
+            if _arrival(cfg, c, rec, s, eps, index, users, now, lines, just_searched):
+                drops.append((rec, s, "unavailable"))
             continue
         if rec["window_start"] is None:
             t = trial_eps(eps, n)
@@ -557,8 +573,12 @@ def daily_decide(cfg, c, st, now, lines=None):
         if not jf:
             lines.append(f"{rec['title']}: not found in Jellyfin - decision postponed")
             continue
-        if is_request(rec):
-            views, rec["played"], n_eff = request_views(c, jf["Id"], users, n)
+        if is_request(rec) or is_season(rec):
+            views, snap, n_eff = request_views(c, jf["Id"], users, n, is_season(rec))
+            if is_season(rec) and not any(snap.values()):
+                lines.append(f"{rec['title']}: Jellyfin doesn't show any season 1 episodes yet - decision postponed")
+                continue
+            rec["played"] = snap
             verdict, likes, dislikes = decide(views, n_eff)
             (keeps if verdict == "keep" else drops).append((rec, s, f"{likes} like / {dislikes} dislike"))
             continue
