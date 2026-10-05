@@ -36,3 +36,12 @@ def test_badge_handles_png_with_alpha_and_tiny_images():
 
 def test_ext_of():
     assert ext_of(picture()) == "jpg" and ext_of(picture(fmt="PNG")) == "png" and ext_of(picture(fmt="WEBP")) == "webp"
+
+
+def test_card_clears_tv_overscan_six_percent_from_bottom_and_right():
+    out = Image.open(io.BytesIO(badge(picture(), URL))).convert("RGB")
+    w, h = out.size
+    right = out.crop((w - int(w * 0.06) + 8, 0, w, h))        # +8: a JPEG block of ringing at the card's edge
+    bottom = out.crop((0, h - int(h * 0.06) + 8, w, h))
+    for strip in (right, bottom):
+        assert all(hi <= 100 for _, hi in strip.getextrema())                     # still the dark background
