@@ -26,7 +26,8 @@ def badge(image, url, caption=CAPTION):
     img = Image.open(io.BytesIO(image)).convert("RGB")
     w, h = img.size
     side = max(48, round(h * 0.22))
-    pad, margin = max(4, side // 12), max(6, round(h * 0.03))
+    pad = max(4, side // 12)
+    right, bottom = max(6, round(w * 0.06)), max(6, round(h * 0.06))   # clear of TV overscan
     font = _font(max(10, side // 8))
     draw = ImageDraw.Draw(img)
     tw = draw.textlength(caption, font=font)
@@ -37,7 +38,7 @@ def badge(image, url, caption=CAPTION):
     code = qr.make_image(fill_color="black", back_color="white").get_image().convert("RGB")
     code = code.resize((side, side), Image.NEAREST)
     card_w, card_h = max(side, round(tw)) + 2 * pad, side + text_h + 3 * pad
-    x0, y0 = w - margin - card_w, h - margin - card_h
+    x0, y0 = w - right - card_w, h - bottom - card_h
     draw.rounded_rectangle((x0, y0, x0 + card_w, y0 + card_h), radius=pad * 2, fill="white")
     img.paste(code, (x0 + (card_w - side) // 2, y0 + pad))
     draw.text((x0 + (card_w - tw) / 2, y0 + 2 * pad + side - t), caption, fill="black", font=font)
