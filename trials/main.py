@@ -9,7 +9,7 @@ from .jobs import Clients, daily_decide, iso, parse, weekly_add, weekly_add_movi
 
 
 def build_clients(cfg):
-    return Clients(Sonarr(cfg.sonarr_url, cfg.sonarr_key), Jellyfin(cfg.jellyfin_url, cfg.jellyfin_key),
+    return Clients(Sonarr(cfg.sonarr_url, cfg.sonarr_key), Jellyfin(cfg.jellyfin_url, cfg.jellyfin_key, roots=(cfg.trials_root, cfg.trials_movies_root)),
                    Seerr(cfg.seerr_url, cfg.seerr_key), Ntfy(cfg.ntfy_url, cfg.ntfy_topic),
                    Radarr(cfg.radarr_url, cfg.radarr_key) if cfg.radarr_url and cfg.radarr_key else None)
 

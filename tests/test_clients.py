@@ -335,3 +335,33 @@ def test_jellyfin_set_image_primary_and_first_backdrop():
     calls = [(m, u.split("http://j")[1]) for m, u, _, _ in t.calls]
     assert calls == [("POST", "/Items/i1/Images/Primary"), ("GET", "/Items/i1/Images"), ("POST", "/Items/i1/Images/Backdrop")]
     assert t.calls[0][2]["Content-Type"] == "image/png"
+
+
+def test_indexes_also_ask_the_trials_library_directly():
+    # live Jellyfin 12: the global recursive query leaves out the movies in the mixed "On Trial"
+    # library; asking that library by ParentId finds them
+    t = FakeTransport({
+        ("GET", "http://j/Items?ParentId=L1"): (200, {"Items": [
+            {"Id": "m9", "Path": "/data/media/trials/Trial Film (2026)/Trial Film.mkv"},
+            {"Id": "s9", "Path": "/data/media/trials/Trial Show"}]}),
+        ("GET", "http://j/Items?"): (200, {"Items": [{"Id": "m1", "Path": "/data/media/movies/Old (1999)/Old.mkv"}]}),
+        ("GET", "http://j/Library/VirtualFolders"): (200, [
+            {"Name": "Movies", "ItemId": "L0", "Locations": ["/data/media/movies"]},
+            {"Name": "On Trial", "ItemId": "L1", "Locations": ["/data/media/trials"]}]),
+    })
+    j = Jellyfin("http://j", "K", t, roots=("/data/media/trials",))
+    # (the fake answers both type queries with the same items)
+    assert {"/data/media/movies/Old (1999)", "/data/media/trials/Trial Film (2026)"} <= set(j.movie_index())
+    queried = [u for m, u, _, _ in t.calls if "ParentId" in u]
+    assert len(queried) == 1 and "IncludeItemTypes=Movie" in queried[0]           # only the trials library
+    assert "/data/media/trials/Trial Show" in j.series_index()
+    t.calls.clear()
+    Jellyfin("http://j", "K", t).movie_index()                                      # no roots: one query, as before
+    assert [u.split("?")[0] for _, u, _, _ in t.calls] == ["http://j/Items"]
+
+
+def test_build_clients_tells_jellyfin_the_trials_roots(tmp_path):
+    from trials.main import build_clients
+    from fakes import make_cfg
+    c = build_clients(make_cfg(tmp_path, trials_root="/data/media/trials", trials_movies_root="/data/media/trial-movies"))
+    assert set(c.jellyfin.roots) == {"/data/media/trials", "/data/media/trial-movies"}

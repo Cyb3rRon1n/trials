@@ -185,16 +185,31 @@ class Radarr(Arr):
 
 
 class Jellyfin:
-    def __init__(self, url, key, transport=urllib_transport):
+    def __init__(self, url, key, transport=urllib_transport, roots=()):
         self.http = Http(url, {"Authorization": f'MediaBrowser Token="{key}"'}, transport)
         self.anon = Http(url, {"Authorization": AUTH_CLIENT}, transport)
+        self.roots = [r for r in roots if r]   # library folders that must be asked directly (see _items)
 
     def users(self):
         return [{"Id": u["Id"], "Name": u["Name"]} for u in self.http.call("GET", "/Users")]
 
+    def libraries(self):
+        """[{Name, ItemId, Locations, ...}] - every library and its folders"""
+        return self.http.call("GET", "/Library/VirtualFolders")
+
+    def _items(self, item_type):
+        """every item of a type with its Path. Jellyfin 12's global recursive query leaves out the
+        mixed-content "On Trial" library (seen live), so libraries holding our roots are asked directly too"""
+        query = {"Recursive": "true", "IncludeItemTypes": item_type, "Fields": "Path"}
+        items = self.http.call("GET", "/Items", query)["Items"]
+        if self.roots:
+            for lib in self.libraries():
+                if any(_covers(loc, r) or _covers(r, loc) for loc in lib.get("Locations") or [] for r in self.roots):
+                    items += self.http.call("GET", "/Items", {"ParentId": lib["ItemId"], **query})["Items"]
+        return [i for i in items if i.get("Path")]
+
     def series_index(self):
-        r = self.http.call("GET", "/Items", {"Recursive": "true", "IncludeItemTypes": "Series", "Fields": "Path"})
-        return {i["Path"].rstrip("/"): i for i in r["Items"] if i.get("Path")}
+        return {i["Path"].rstrip("/"): i for i in self._items("Series")}
 
     def taste_items(self, user_id):
         """every show/movie with this user's data + genres (for the taste profile)"""
@@ -203,8 +218,7 @@ class Jellyfin:
 
     def movie_index(self):
         """movie folder -> item (a movie's Path is its file; Radarr knows the folder)"""
-        r = self.http.call("GET", "/Items", {"Recursive": "true", "IncludeItemTypes": "Movie", "Fields": "Path"})
-        return {i["Path"].rsplit("/", 1)[0]: i for i in r["Items"] if i.get("Path")}
+        return {i["Path"].rsplit("/", 1)[0]: i for i in self._items("Movie")}
 
     def all_episodes(self, series_id, user_id):
         return self.http.call("GET", f"/Shows/{series_id}/Episodes", {"userId": user_id, "IsMissing": "false"})["Items"]
