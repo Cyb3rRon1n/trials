@@ -1,6 +1,7 @@
 import html
 import io
 import os
+import re
 import secrets
 import zipfile
 import threading
@@ -25,6 +26,7 @@ button.on.up{border-color:var(--up);color:var(--up)}button.on.down{border-color:
 a{color:var(--accent)}input{font:inherit;padding:8px;border:1px solid var(--line);border-radius:8px;width:100%;margin:4px 0 12px;background:var(--card);color:var(--fg)}
 .note{color:var(--muted);font-size:.9rem}
 nav{display:flex;gap:14px;flex-wrap:wrap;margin:0 0 18px}nav a{text-decoration:none}
+.card:target{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent)}
 button.admin{border-style:dashed}.tag{font-size:.8rem;color:var(--muted);border:1px solid var(--line);border-radius:6px;padding:1px 6px;margin-left:6px}
 """
 
@@ -35,12 +37,20 @@ def page(body):
             f'<body><main>{body}</main></body></html>')
 
 
-def render_login(msg=""):
+DEEP_LINK = re.compile(r"(movie:)?\d+")   # a trial's state key, as the artwork QR codes link to it
+
+
+def deep_link(t):
+    return t if t and DEEP_LINK.fullmatch(t) else None
+
+
+def render_login(msg="", t=None):
     err = f'<p class="note">{html.escape(msg)}</p>' if msg else ""
+    keep = f'<input type="hidden" name="t" value="{t}">' if deep_link(t) else ""
     return page('<h1>Trial Shows</h1><p class="lead">Sign in with your Jellyfin account to vote.</p>'
                 f'{err}<form method="post" action="/login"><label>Username<input name="username" autocomplete="username"></label>'
                 '<label>Password<input type="password" name="password" autocomplete="current-password"></label>'
-                '<button type="submit">Sign in</button></form>')
+                f'{keep}<button type="submit">Sign in</button></form>')
 
 
 def trials_view(cfg, c):
@@ -125,9 +135,8 @@ def render_page(cfg, c, user):
     for rec, jf in rows:
         title = html.escape(rec["title"]) + ('<span class="tag">🎬 movie</span>' if rec.get("media") == "movie" else "") \
             + ('<span class="tag">requested</span>' if rec.get("kind") == "request" else "")
-        over = ""
+        over, key = "", html.escape(trial_key(rec))
         if admin:
-            key = html.escape(trial_key(rec))
             if rec.get("override"):
                 over = f'<br><small>Overruled by the admins: {rec["override"]["verdict"]} (applying)</small>'
             else:
@@ -135,7 +144,7 @@ def render_page(cfg, c, user):
                                f'<input type="hidden" name="verdict" value="{v}"><button class="admin">{l}</button></form>'
                                for v, l in (("keep", "✅ Admin: keep"), ("drop", "🗑️ Admin: drop")))
         if not jf:
-            cards.append(f'<div class="card"><div class="meta"><h2>{title}</h2><small>{html.escape(_deadline(cfg, rec))}</small><div>{over}</div></div></div>')
+            cards.append(f'<div class="card" id="t-{key}"><div class="meta"><h2>{title}</h2><small>{html.escape(_deadline(cfg, rec))}</small><div>{over}</div></div></div>')
             continue
         iid = html.escape(jf["Id"])
         mine = c.jellyfin.likes(jf["Id"], user["id"])
@@ -146,7 +155,7 @@ def render_page(cfg, c, user):
         if mine is not None:
             buttons += btn("clear", "Clear my vote", False)
         dry = f'<br><small>Current outcome: {html.escape(rec["dry_run"])}</small>' if rec.get("dry_run") else ""
-        cards.append(f'<div class="card"><img src="{pub}/Items/{iid}/Images/Primary?maxHeight=252" alt="">'
+        cards.append(f'<div class="card" id="t-{key}"><img src="{pub}/Items/{iid}/Images/Primary?maxHeight=252" alt="">'
                      f'<div class="meta"><h2><a href="{pub}/web/#/details?id={iid}">{title}</a></h2>'
                      f'<small>{html.escape(_deadline(cfg, rec))}</small>{dry}<div>{buttons}{over}</div></div></div>')
     body = nav(cfg, user, "/") + (f'<h1>On Trial</h1><p class="lead">Hi {html.escape(user["name"])}. These are on a {cfg.window_days}-day trial: '
@@ -196,16 +205,20 @@ def make_server(cfg, c, host="0.0.0.0", port=None, on_override=None):
             return {k: v[0] for k, v in urllib.parse.parse_qs(self.rfile.read(n).decode()).items()}
 
         def _handle_get(self):
-            if self.path == "/healthz":
+            url = urllib.parse.urlsplit(self.path)
+            path, t = url.path, deep_link(urllib.parse.parse_qs(url.query).get("t", [None])[0])
+            if path == "/healthz":
                 return self._send(200, "ok", "text/plain")
             user = self._user()
-            if self.path not in ("/", "/rate", "/admin/backup.zip"):
+            if path not in ("/", "/rate", "/admin/backup.zip"):
                 return self._send(404, "not found", "text/plain")
             if not user:
-                return self._send(200, render_login())
-            if self.path == "/rate":
+                return self._send(200, render_login(t=t))
+            if t and path == "/":   # the browser scrolls to + highlights that card (CSS :target)
+                return self._redirect(to=f"/#t-{t}")
+            if path == "/rate":
                 return self._send(200, render_rate(cfg, c, user))
-            if self.path == "/admin/backup.zip":
+            if path == "/admin/backup.zip":
                 if not cfg.is_admin(user):
                     return self._send(403, "admins only", "text/plain")
                 snap = latest_backup(cfg)
@@ -220,12 +233,14 @@ def make_server(cfg, c, host="0.0.0.0", port=None, on_override=None):
             form = self._form()
             if self.path == "/login":
                 user = c.jellyfin.authenticate(form.get("username", ""), form.get("password", ""))
+                t = deep_link(form.get("t"))
                 if not user:
-                    return self._send(200, render_login("Wrong username or password."))
+                    return self._send(200, render_login("Wrong username or password.", t))
                 token = secrets.token_urlsafe(24)
                 with lock:
                     sessions[token] = user
-                return self._redirect([("Set-Cookie", f"trials_session={token}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=2592000")])
+                return self._redirect([("Set-Cookie", f"trials_session={token}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=2592000")],
+                                      to=f"/#t-{t}" if t else "/")
             user = self._user()
             if not user:
                 return self._redirect()
