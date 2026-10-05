@@ -1,18 +1,31 @@
 from datetime import timedelta
 import pytest
 from trials import state
-from trials.jobs import Clients, daily_decide, iso, weekly_add
+from trials.jobs import Clients, daily_decide, iso, setup_trial
 from fakes import FakeJellyfin, FakeNtfy, FakeSeerr, FakeSonarr, NOW, ep, make_cfg
+
+# These cover trials set up before whole-season trials (no "trial_mode": E01-0n of season 1,
+# half-season sized) - they must keep behaving exactly as before. Whole-season trials: test_season_trials.py
+
+
+def legacy_trial(cfg, c, st, tmdb, tvdb, title, added, setup=True):
+    s = c.sonarr.add_series({"title": title, "tvdbId": tvdb}, 7, cfg.trials_root, c.sonarr.tag_id("trial"))
+    rec = st["shows"][str(tvdb)] = {
+        "tvdb": tvdb, "tmdb": tmdb, "title": title, "sonarr_id": s["id"], "path": s["path"],
+        "added_at": iso(added), "window_start": None, "status": "active", "dest": cfg.tv_root,
+        "played": None, "setup_done": False, "dry_run": None}
+    if setup:
+        setup_trial(c, rec, c.sonarr.episodes(s["id"]))
+    else:
+        c.sonarr.eps[s["id"]] = []
+    return rec
 
 
 def world(tmp_path, added_days_ago=30, **kw):
     cfg = make_cfg(tmp_path, **kw)
     c = Clients(FakeSonarr(), FakeJellyfin(), FakeSeerr(), FakeNtfy())
     st = state.empty()
-    c.seerr.add_show(5, 1005, "Plain Show")
-    c.sonarr.lookups[1005] = {"title": "Plain Show", "tvdbId": 1005}
-    weekly_add(cfg, c, st, NOW - timedelta(days=added_days_ago))
-    rec = st["shows"]["1005"]
+    rec = legacy_trial(cfg, c, st, 5, 1005, "Plain Show", NOW - timedelta(days=added_days_ago))
     return cfg, c, st, rec, rec["sonarr_id"]
 
 
@@ -156,10 +169,7 @@ def test_deletion_ceiling_deletes_nothing(tmp_path):
     c.jellyfin.eps[("jf1", "u1")] = [ep("e1", 1), ep("e2", 2), ep("e3", 3)]  # no engagement -> delete
 
     # Liked Show: like -> keep
-    c.seerr.add_show(6, 1006, "Liked Show")
-    c.sonarr.lookups[1006] = {"title": "Liked Show", "tvdbId": 1006}
-    weekly_add(cfg, c, st, NOW - timedelta(days=30))
-    rec2 = st["shows"]["1006"]
+    rec2 = legacy_trial(cfg, c, st, 6, 1006, "Liked Show", NOW - timedelta(days=30))
     sid2 = rec2["sonarr_id"]
     arrive(c, sid2)
     rec2["window_start"] = iso(NOW - timedelta(days=22))
@@ -276,21 +286,9 @@ def test_request_before_window_with_setup_pending_keeps(tmp_path):
     cfg = make_cfg(tmp_path)
     c = Clients(FakeSonarr(), FakeJellyfin(), FakeSeerr(), FakeNtfy())
     st = state.empty()
-    c.seerr.add_show(5, 1005, "Plain Show")
-    c.sonarr.lookups[1005] = {"title": "Plain Show", "tvdbId": 1005}
-    # Setup pending: wrap add_series to return no episodes
-    real_add = c.sonarr.add_series
-    def add_without_eps(*a, **kw):
-        s = real_add(*a, **kw)
-        c.sonarr.eps[s["id"]] = []
-        return s
-    c.sonarr.add_series = add_without_eps
-    weekly_add(cfg, c, st, NOW - timedelta(days=1))
-    rec = st["shows"]["1005"]
+    # Setup pending: Sonarr had no episodes yet
+    rec = legacy_trial(cfg, c, st, 5, 1005, "Plain Show", NOW - timedelta(days=1), setup=False)
     sid = rec["sonarr_id"]
-    assert rec["setup_done"] is False
-    # Restore add_series and give episodes
-    c.sonarr.add_series = real_add
     c.sonarr.eps[sid] = [{"id": i + sid * 100, "seasonNumber": 1, "episodeNumber": i, "monitored": False, "hasFile": True}
                          for i in range(1, 4)]
     arrive(c, sid)

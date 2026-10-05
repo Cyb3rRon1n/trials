@@ -79,6 +79,14 @@ class Sonarr:
     def episodes(self, sid):
         return self.http.call("GET", "/episode", {"seriesId": sid})
 
+    def monitor_season(self, sid, season):
+        """monitor a whole season at series level - Sonarr then monitors its episodes, including ones listed later"""
+        s = self.get_series(sid)
+        for x in s["seasons"]:
+            if x["seasonNumber"] == season:
+                x["monitored"] = True
+        self.http.call("PUT", f"/series/{sid}", body=s)
+
     def set_monitored(self, ids, monitored):
         if ids:
             self.http.call("PUT", "/episode/monitor", body={"episodeIds": list(ids), "monitored": monitored})
