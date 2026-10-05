@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from . import state as state_mod
 from .clients import Jellyfin, Ntfy, Radarr, Seerr, Sonarr
 from .config import Config
-from .jobs import Clients, daily_decide, iso, parse, weekly_add
+from .jobs import Clients, daily_decide, iso, parse, weekly_add, weekly_add_movies
 
 
 def build_clients(cfg):
@@ -35,6 +35,7 @@ def run_job(name, cfg, c, now):
         try:
             if name == "add":
                 weekly_add(cfg, c, st, now, lines)
+                weekly_add_movies(cfg, c, st, now, lines)
                 st["last_add_week"] = now.strftime("%G-W%V")
             else:
                 daily_decide(cfg, c, st, now, lines)
@@ -75,7 +76,7 @@ def probe(cfg, c):
     if c.radarr:
         print("radarr movies:", len(c.radarr.movies()), "| trials movies root:", cfg.trials_movies_root)
     else:
-        print("radarr: not configured - movie request trials disabled")
+        print("radarr: not configured - movie trials disabled")
     trending = c.seerr.trending_tv(pages=1)[:5]
     for t in trending:
         d = c.seerr.tv(t["id"])

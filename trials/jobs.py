@@ -207,26 +207,46 @@ def affinity(genre_names, prof):
     return sum(prof.get(g, 0) for g in gs) / len(gs) if gs else 0.0
 
 
+def _added_this_week(st, now, movies):
+    week = now.strftime("%G-W%V")
+    return sum(1 for rec in st["shows"].values() if is_movie(rec) == movies
+               and rec.get("added_at") and parse(rec["added_at"]).strftime("%G-W%V") == week)
+
+
+def _pool(items):
+    """trending + popular, first appearance wins (so the order is the trending position)"""
+    pool, seen = [], set()
+    for item in items:
+        if item["id"] not in seen:
+            seen.add(item["id"]); pool.append(item)
+    return pool
+
+
+def _rank(ranked, pool_size):
+    """(affinity, trend position, ...) tuples, best first: half taste match, half trending position -
+    so it stays "what's new" and not just "what's big"; with no history yet it's plain trending order"""
+    top = max((abs(r[0]) for r in ranked), default=0) or 1
+    return sorted(ranked, key=lambda r: -(0.5 * r[0] / top + 0.5 * (1 - r[1] / max(pool_size, 1))))
+
+
+def _low_space(cfg, free, what, lines):
+    if free < cfg.min_free_tb * 1e12:
+        lines.append(f"skipped weekly {what}: only {free / 1e12:.2f} TB free (< {cfg.min_free_tb} TB)")
+        return True
+    return False
+
+
 def weekly_add(cfg, c, st, now, lines=None):
     lines = [] if lines is None else lines
-    free = c.sonarr.free_bytes(cfg.trials_root)
-    if free < cfg.min_free_tb * 1e12:
-        lines.append(f"skipped weekly add: only {free / 1e12:.2f} TB free (< {cfg.min_free_tb} TB)")
+    if _low_space(cfg, c.sonarr.free_bytes(cfg.trials_root), "add", lines):
         return lines
     skip = _skip_set(st, now) | {s["tvdbId"] for s in c.sonarr.series()}
     tag = c.sonarr.tag_id(TAG)
     profile = c.sonarr.quality_profile_id(cfg.quality_profile)
-    week = now.strftime("%G-W%V")
-    already = sum(1 for rec in st["shows"].values()
-                  if rec.get("added_at") and parse(rec["added_at"]).strftime("%G-W%V") == week)
-    target = max(0, cfg.trials_per_week - already)
+    target = max(0, cfg.trials_per_week - _added_this_week(st, now, movies=False))
     added = 0
     # candidates: trending + popular, ranked by how well they match what users watch, like and ♥
-    # (trending position breaks ties, so with no history yet it's plain trending order)
-    pool, seen = [], set()
-    for item in c.seerr.trending_tv() + c.seerr.popular_tv():
-        if item["id"] not in seen:
-            seen.add(item["id"]); pool.append(item)
+    pool = _pool(c.seerr.trending_tv() + c.seerr.popular_tv())
     prof = taste_profile(c, c.jellyfin.users()) if target else {}
     ranked = []
     for rank, item in enumerate(pool):
@@ -235,10 +255,7 @@ def weekly_add(cfg, c, st, now, lines=None):
         if not tvdb or tvdb in skip or not brand_new(det, now, cfg.new_days):
             continue
         ranked.append((affinity([g["name"] for g in det.get("genres") or []], prof), rank, item, det, tvdb))
-    # half taste match, half trending position - so it stays "what's new" and not just "what's big"
-    top = max((abs(r[0]) for r in ranked), default=0) or 1
-    ranked.sort(key=lambda r: -(0.5 * r[0] / top + 0.5 * (1 - r[1] / max(len(pool), 1))))
-    for _, _, item, det, tvdb in ranked:
+    for _, _, item, det, tvdb in _rank(ranked, len(pool)):
         if added >= target:
             break
         lookup = c.sonarr.lookup_tvdb(tvdb)
@@ -257,6 +274,65 @@ def weekly_add(cfg, c, st, now, lines=None):
         setup_season(c, rec, c.sonarr.episodes(s["id"]), now)
         lines.append(f"trial added: {s['title']} (season 1) -> Trials library")
         added += 1
+    return lines
+
+
+def movie_release(details):
+    """when a movie became downloadable: its digital release (TMDb type 4) - physical (5) if it has
+    no digital one - earliest in any country. None if TMDb lists neither."""
+    dates = {4: [], 5: []}
+    for country in (details.get("releases") or {}).get("results") or []:
+        for d in country.get("release_dates") or []:
+            if d.get("type") in dates and d.get("release_date"):
+                dates[d["type"]].append(d["release_date"])
+    found = dates[4] or dates[5]
+    return min(found, key=parse) if found else None
+
+
+def weekly_add_movies(cfg, c, st, now, lines=None):
+    """weekly new-movie trials: released digitally in the last new_days, picked like the shows"""
+    lines = [] if lines is None else lines
+    if c.radarr is None:
+        return lines
+    if _low_space(cfg, c.radarr.free_bytes(cfg.trials_movies_root), "movie add", lines):
+        return lines
+    target = max(0, cfg.movies_per_week - _added_this_week(st, now, movies=True))
+    if not target:
+        return lines
+    skip = _skip_set(st, now, movies=True) | {m["tmdbId"] for m in c.radarr.movies()}
+    pool = _pool(c.seerr.trending_movies() + c.seerr.popular_movies())
+    prof = taste_profile(c, c.jellyfin.users())
+    ranked = []
+    for rank, item in enumerate(pool):
+        if item["id"] in skip:
+            continue
+        det, lookup = c.seerr.movie(item["id"]), None
+        released = movie_release(det)
+        if not released:   # TMDb has no digital/physical date: Radarr may (it reads other sources too)
+            lookup = c.radarr.lookup_tmdb(item["id"]) or {}
+            released = lookup.get("digitalRelease") or lookup.get("physicalRelease")
+        if recent(released, now, cfg.new_days):
+            ranked.append((affinity([g["name"] for g in det.get("genres") or []], prof), rank, item, lookup))
+    added, tag, profile = 0, None, None
+    for _, _, item, lookup in _rank(ranked, len(pool)):
+        if added >= target:
+            break
+        lookup = lookup or c.radarr.lookup_tmdb(item["id"])
+        if not lookup:
+            continue
+        added += 1
+        if not cfg.enforce:   # dry run: nothing added to Radarr or state
+            lines.append(f"[dry-run] would add movie trial: {lookup['title']} ({lookup.get('year')})")
+            continue
+        if tag is None:
+            tag, profile = c.radarr.tag_id(TAG), c.radarr.quality_profile_id(cfg.quality_profile)
+        m = c.radarr.add_movie(lookup, profile, cfg.trials_movies_root, tag)
+        title = f"{m['title']} ({m.get('year')})"
+        st["shows"][f"movie:{m['tmdbId']}"] = {
+            "tmdb": m["tmdbId"], "title": title, "radarr_id": m["id"], "path": m["path"], "added_at": iso(now),
+            "window_start": None, "status": "active", "dest": cfg.movies_root, "played": None, "dry_run": None,
+            "kind": "auto", "media": "movie"}
+        lines.append(f"movie trial added: {title} -> Trials library")
     return lines
 
 
