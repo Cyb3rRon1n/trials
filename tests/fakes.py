@@ -103,6 +103,7 @@ class FakeJellyfin:
     def get_image(self, item_id, image_type, index=0):
         if getattr(self, "image_fails", False):
             raise RuntimeError("jellyfin image fetch failed")
+        self.calls.append(("get_image", item_id, image_type))
         return getattr(self, "images", {}).get((item_id, image_type))
 
     def set_image(self, item_id, image_type, data, ctype="image/jpeg"):

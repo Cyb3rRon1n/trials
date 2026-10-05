@@ -1,4 +1,5 @@
 import glob
+import hashlib
 import mimetypes
 import os
 from dataclasses import dataclass
@@ -357,35 +358,56 @@ def _art_dir(cfg):
     return os.path.join(os.path.dirname(cfg.state_path) or ".", "art")
 
 
+def _save_orig(path, data):
+    with open(path + ".tmp", "wb") as f:
+        f.write(data)
+    os.replace(path + ".tmp", path)
+
+
 def _qr_badge(cfg, c, rec, jf_id, lines):
     """Best-effort: a "scan to vote" QR on the artwork TV apps show full-screen (the backdrop, else
-    the poster) - Roku / Android TV have no 👍/👎. The original is kept on disk until the trial ends."""
-    if not cfg.qr_art or not cfg.trials_public_url or rec.get("qr") or not rec.get("window_start"):
+    the poster) - Roku / Android TV have no 👍/👎. The original is kept on disk until the trial ends.
+    Once badged, one fetch per run checks it's still ours: a metadata refresh can replace it."""
+    qr = rec.get("qr")
+    if not cfg.qr_art or not cfg.trials_public_url or not rec.get("window_start") or (qr and not qr.get("type")):
         return
     try:
         from . import art   # Pillow is only loaded when this is used
-        os.makedirs(_art_dir(cfg), exist_ok=True)
-        for kind in ("Backdrop", "Primary"):
-            # an original saved by an earlier, interrupted run wins: Jellyfin may already show the badge
-            saved = glob.glob(os.path.join(_art_dir(cfg), f"{jf_id}-{kind}.*"))
-            if saved:
-                path = saved[0]
-                with open(path, "rb") as f:
-                    orig = f.read()
-                break
-            orig = c.jellyfin.get_image(jf_id, kind)
-            if orig:
-                path = os.path.join(_art_dir(cfg), f"{jf_id}-{kind}.{art.ext_of(orig)}")
-                with open(path + ".tmp", "wb") as f:
-                    f.write(orig)
-                os.replace(path + ".tmp", path)
-                break
+        if qr:
+            current = c.jellyfin.get_image(jf_id, qr["type"])
+            if not current or hashlib.sha256(current).hexdigest() == qr.get("sha"):
+                return
+            if art.has_badge(current):   # still ours, just re-encoded somewhere: not new artwork
+                qr["sha"] = hashlib.sha256(current).hexdigest()
+                return
+            # Jellyfin replaced it (metadata refresh): that's the original now
+            kind, orig = qr["type"], current
+            path = os.path.join(_art_dir(cfg), f"{jf_id}-{kind}.{art.ext_of(orig)}")
+            _save_orig(path, orig)
+            if path != qr["orig"] and os.path.exists(qr["orig"]):
+                os.remove(qr["orig"])
         else:
-            rec["qr"] = {"item": jf_id, "type": None, "orig": None}
-            lines.append(f"{rec['title']}: no artwork in Jellyfin to put the vote QR on")
-            return
-        c.jellyfin.set_image(jf_id, kind, art.badge(orig, f"{cfg.trials_public_url.rstrip('/')}/?t={trial_key(rec)}"))
-        rec["qr"] = {"item": jf_id, "type": kind, "orig": path}
+            os.makedirs(_art_dir(cfg), exist_ok=True)
+            for kind in ("Backdrop", "Primary"):
+                # an original saved by an earlier, interrupted run wins: Jellyfin may already show the badge
+                saved = glob.glob(os.path.join(_art_dir(cfg), f"{jf_id}-{kind}.*"))
+                if saved:
+                    path = saved[0]
+                    with open(path, "rb") as f:
+                        orig = f.read()
+                    break
+                orig = c.jellyfin.get_image(jf_id, kind)
+                if orig:
+                    path = os.path.join(_art_dir(cfg), f"{jf_id}-{kind}.{art.ext_of(orig)}")
+                    _save_orig(path, orig)
+                    break
+            else:
+                rec["qr"] = {"item": jf_id, "type": None, "orig": None}
+                lines.append(f"{rec['title']}: no artwork in Jellyfin to put the vote QR on")
+                return
+        data = art.badge(orig, f"{cfg.trials_public_url.rstrip('/')}/?t={trial_key(rec)}")
+        c.jellyfin.set_image(jf_id, kind, data)
+        rec["qr"] = {"item": jf_id, "type": kind, "orig": path, "sha": hashlib.sha256(data).hexdigest()}
     except Exception as e:
         lines.append(f"{rec['title']}: couldn't add the vote QR to its artwork: {e}")
 
