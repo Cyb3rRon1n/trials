@@ -1,9 +1,23 @@
 # trials
 
-Weekly "trial shows" for a Jellyfin + Sonarr + Seerr stack. Every Monday it adds the first
-half of season 1 of 3 TMDb-trending shows to a separate **Trials** library. Users vote 👍/👎 on a
-small page. After 14 days, shows most people liked are moved to their permanent library
-and completed; the rest are deleted. It only ever touches shows it added itself.
+Weekly "trial shows" for a Jellyfin + Sonarr + Seerr (+ Radarr) stack. It only ever touches what it
+added itself (or what an admin approved into the trials folder).
+
+**Selection.** Every Monday it picks from Seerr's trending + popular lists, ranked half by how well a
+title matches what users watch, 👍 and ♥ and half by trending position:
+- up to `TRIALS_PER_WEEK` (3) **brand-new shows**: exactly one season (specials aside), premiered in the
+  last `NEW_DAYS` (30) days, at least one episode out;
+- with Radarr configured, up to `MOVIES_PER_WEEK` (2) **new movies**: digital release (physical if
+  there is none) in the last `NEW_DAYS` days.
+Nothing already in Sonarr/Radarr, rejected before, or trialled before is picked.
+
+**Trials.** A show's trial is the whole of season 1: all of it is monitored, so episodes airing
+during the trial download too. Everything sits in one mixed **On Trial** library. Voting opens once
+the movie, or every aired episode, is in; a show also opens after `ARRIVAL_DAYS` (14) with whatever
+arrived, and is dropped if nothing has. Users vote 👍/👎 on a small page for `WINDOW_DAYS` (21) days:
+keep it permanently (a kept show follows future seasons too) or drop it. ♥ counts double; no vote but
+finished it (3 episodes, or all there were) counts as a keep. Kept titles move to their permanent
+library with everyone's watch history; dropped ones are deleted.
 
 Design: `docs/superpowers/specs/2026-09-25-trial-shows-design.md`.
 
@@ -14,7 +28,8 @@ Design: `docs/superpowers/specs/2026-09-25-trial-shows-design.md`.
     python -m trials serve      # web page + scheduler
 
 Configuration is by environment variable (see `trials/config.py`). `TRIALS_ENFORCE=0`
-(the default) means decisions are only reported, never carried out.
+(the default) means decisions are only reported, never carried out, and new movie trials are only
+listed, not added (new show trials still are).
 
 ## Operating it
 
