@@ -269,3 +269,31 @@ def test_fakes_only_fake_methods_the_real_clients_have():
                        (fakes.FakeJellyfin, Jellyfin), (fakes.FakeNtfy, Ntfy)):
         missing = {m for m in vars(fake) if not m.startswith("_") and callable(getattr(fake, m))} - helpers - set(dir(real))
         assert not missing, f"{fake.__name__} fakes {missing}, which {real.__name__} lacks"
+
+
+def test_seerr_movie_candidates_and_details():
+    t = FakeTransport({("GET", "http://e/api/v1/discover/trending"): (200, {"results": [
+                           {"id": 1, "mediaType": "movie"}, {"id": 2, "mediaType": "tv"}]}),
+                       ("GET", "http://e/api/v1/discover/movies"): (200, {"results": [{"id": 3}]}),
+                       ("GET", "http://e/api/v1/movie/3"): (200, {"id": 3, "releases": {"results": []}})})
+    s = Seerr("http://e", "k", t)
+    assert [r["id"] for r in s.trending_movies(pages=1)] == [1]
+    assert s.popular_movies(pages=1) == [{"id": 3, "mediaType": "movie"}]
+    assert s.movie(3)["releases"] == {"results": []}
+
+
+def test_radarr_lookup_add_profile_and_free_space():
+    from trials.clients import Radarr
+    t = FakeTransport({("GET", "http://r/api/v3/movie/lookup/tmdb"): (200, {"title": "Film", "tmdbId": 9}),
+                       ("POST", "http://r/api/v3/movie"): (201, {"id": 40, "title": "Film"}),
+                       ("GET", "http://r/api/v3/qualityprofile"): (200, [{"id": 4, "name": "HD-1080p"}]),
+                       ("GET", "http://r/api/v3/diskspace"): (200, [{"path": "/data", "freeSpace": 7}])})
+    r = Radarr("http://r", "k", t)
+    lookup = r.lookup_tmdb(9)
+    assert lookup["title"] == "Film" and "tmdbId=9" in t.calls[0][1]
+    assert r.quality_profile_id("HD-1080p") == 4 and r.free_bytes("/data/media/trials") == 7
+    assert r.add_movie(lookup, 4, "/data/media/trials", 1)["id"] == 40
+    body = [c for c in t.calls if c[0] == "POST"][0][3]
+    assert (body["tmdbId"], body["qualityProfileId"], body["rootFolderPath"], body["tags"], body["monitored"]) == \
+        (9, 4, "/data/media/trials", [1], True)
+    assert body["addOptions"] == {"searchForMovie": True} and body["minimumAvailability"] == "released"
