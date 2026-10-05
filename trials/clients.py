@@ -203,9 +203,13 @@ class Jellyfin:
         query = {"Recursive": "true", "IncludeItemTypes": item_type, "Fields": "Path"}
         items = self.http.call("GET", "/Items", query)["Items"]
         if self.roots:
+            user = None   # asked as a user: without one, items under a stale "trials" Folder are left out (seen live)
             for lib in self.libraries():
                 if any(_covers(loc, r) or _covers(r, loc) for loc in lib.get("Locations") or [] for r in self.roots):
-                    items += self.http.call("GET", "/Items", {"ParentId": lib["ItemId"], **query})["Items"]
+                    if user is None:
+                        user = next(iter(self.users()), {}).get("Id", "")
+                    as_user = {"userId": user} if user else {}
+                    items += self.http.call("GET", "/Items", {"ParentId": lib["ItemId"], **as_user, **query})["Items"]
         return [i for i in items if i.get("Path")]
 
     def series_index(self):
