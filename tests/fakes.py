@@ -100,6 +100,17 @@ class FakeJellyfin:
         self.note_fails = False
         self.notes = {}
 
+    def get_image(self, item_id, image_type, index=0):
+        if getattr(self, "image_fails", False):
+            raise RuntimeError("jellyfin image fetch failed")
+        return getattr(self, "images", {}).get((item_id, image_type))
+
+    def set_image(self, item_id, image_type, data, ctype="image/jpeg"):
+        if getattr(self, "image_fails", False):
+            raise RuntimeError("jellyfin image upload failed")
+        self.__dict__.setdefault("images", {})[(item_id, image_type)] = data
+        self.calls.append(("image", item_id, image_type, data[:4]))
+
     def set_trial_note(self, item_id, user_id, note):
         if self.note_fails:
             raise RuntimeError("jellyfin item update failed")
