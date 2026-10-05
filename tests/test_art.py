@@ -45,3 +45,12 @@ def test_card_clears_tv_overscan_six_percent_from_bottom_and_right():
     bottom = out.crop((0, h - int(h * 0.06) + 8, w, h))
     for strip in (right, bottom):
         assert all(hi <= 100 for _, hi in strip.getextrema())                     # still the dark background
+
+
+def test_has_badge_recognises_our_card_even_re_encoded():
+    from trials.art import has_badge
+    badged = badge(picture(), URL)
+    worse = io.BytesIO()
+    Image.open(io.BytesIO(badged)).save(worse, "JPEG", quality=60)                # Jellyfin/a proxy re-encoding it
+    assert has_badge(badged) and has_badge(worse.getvalue())
+    assert not has_badge(picture()) and not has_badge(picture(color=(128, 128, 128)))

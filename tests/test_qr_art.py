@@ -1,4 +1,5 @@
 """a 'scan to vote' QR on trial artwork, for TV apps that have no 👍/👎 buttons"""
+import hashlib
 import io
 import os
 from datetime import timedelta
@@ -40,7 +41,8 @@ def test_backdrop_badged_when_voting_opens_original_saved(tmp_path):
     orig = c.jellyfin.images[("jf1", "Backdrop")]
     daily_decide(cfg, c, st, NOW)
     saved = os.path.join(art_dir(cfg), "jf1-Backdrop.jpg")
-    assert rec["qr"] == {"item": "jf1", "type": "Backdrop", "orig": saved}
+    assert rec["qr"] == {"item": "jf1", "type": "Backdrop", "orig": saved,
+                         "sha": hashlib.sha256(c.jellyfin.images[("jf1", "Backdrop")]).hexdigest()}
     assert open(saved, "rb").read() == orig
     badged = c.jellyfin.images[("jf1", "Backdrop")]
     assert badged != orig and Image.open(io.BytesIO(badged)).size == (640, 360)
@@ -149,3 +151,49 @@ def test_movies_get_the_badge_too(tmp_path):
     c.radarr.movies_db[mrec["radarr_id"]]["tags"] = []
     daily_decide(cfg, c, st, NOW + timedelta(days=1))
     assert mrec["status"] == "released" and c.jellyfin.images[("m1", "Backdrop")] == jpeg() and mrec["qr"] is None
+
+
+def sha(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def test_unchanged_badge_costs_one_fetch_and_no_upload(tmp_path):
+    cfg, c, st, rec = world(tmp_path)
+    daily_decide(cfg, c, st, NOW)
+    assert rec["qr"]["sha"] == sha(c.jellyfin.images[("jf1", "Backdrop")])
+    c.jellyfin.calls.clear()
+    daily_decide(cfg, c, st, NOW + timedelta(days=1))
+    assert [x for x in c.jellyfin.calls if x[0] in ("get_image", "image")] == [("get_image", "jf1", "Backdrop")]
+
+
+def test_artwork_replaced_by_a_metadata_refresh_is_re_badged(tmp_path):
+    cfg, c, st, rec = world(tmp_path)
+    daily_decide(cfg, c, st, NOW)
+    fresh = jpeg((90, 10, 10))
+    c.jellyfin.images[("jf1", "Backdrop")] = fresh                                    # Jellyfin refreshed the art
+    daily_decide(cfg, c, st, NOW + timedelta(days=1))
+    now_shown = c.jellyfin.images[("jf1", "Backdrop")]
+    assert open(rec["qr"]["orig"], "rb").read() == fresh                                # new original kept
+    assert now_shown != fresh and rec["qr"]["sha"] == sha(now_shown)                   # badged again
+
+
+def test_our_badge_re_encoded_is_not_mistaken_for_new_art(tmp_path):
+    cfg, c, st, rec = world(tmp_path)
+    orig = c.jellyfin.images[("jf1", "Backdrop")]
+    daily_decide(cfg, c, st, NOW)
+    worse = io.BytesIO()
+    Image.open(io.BytesIO(c.jellyfin.images[("jf1", "Backdrop")])).save(worse, "JPEG", quality=60)
+    c.jellyfin.images[("jf1", "Backdrop")] = worse.getvalue()
+    c.jellyfin.calls.clear()
+    daily_decide(cfg, c, st, NOW + timedelta(days=1))
+    assert open(rec["qr"]["orig"], "rb").read() == orig and not [x for x in c.jellyfin.calls if x[0] == "image"]
+    assert rec["qr"]["sha"] == sha(worse.getvalue())
+
+
+def test_refresh_check_failure_is_tolerated(tmp_path):
+    cfg, c, st, rec = world(tmp_path)
+    daily_decide(cfg, c, st, NOW)
+    before = dict(rec["qr"])
+    c.jellyfin.image_fails = True
+    lines = daily_decide(cfg, c, st, NOW + timedelta(days=1))
+    assert rec["qr"] == before and rec["status"] == "active" and any("vote QR" in l for l in lines)
