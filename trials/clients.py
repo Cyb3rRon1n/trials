@@ -284,7 +284,8 @@ class Jellyfin:
         if image_type != "Backdrop":
             self.http.raw("POST", f"/Items/{item_id}/Images/{image_type}", data=body, ctype=ctype)
             return
-        n = len(self.http.call("GET", f"/Items/{item_id}").get("BackdropImageTags") or [])
+        # /Images, not GET /Items/{id}: that one is HTTP 400 on Jellyfin 12 with an API key and no userId
+        n = sum(1 for i in self.http.call("GET", f"/Items/{item_id}/Images") or [] if i.get("ImageType") == "Backdrop")
         self.http.raw("POST", f"/Items/{item_id}/Images/Backdrop", data=body, ctype=ctype)
         if n:
             self.http.call("POST", f"/Items/{item_id}/Images/Backdrop/{n}/Index", {"newIndex": 0})
