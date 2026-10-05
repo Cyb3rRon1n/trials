@@ -35,7 +35,10 @@ def run_job(name, cfg, c, now):
         try:
             if name == "add":
                 weekly_add(cfg, c, st, now, lines)
-                weekly_add_movies(cfg, c, st, now, lines)
+                try:   # movies are extra: a Radarr/Seerr movie problem must not cost the week's shows a retry
+                    weekly_add_movies(cfg, c, st, now, lines)
+                except Exception as e:
+                    lines.append(f"movie add failed: {type(e).__name__}: {str(e)[:120]}")
                 st["last_add_week"] = now.strftime("%G-W%V")
             else:
                 daily_decide(cfg, c, st, now, lines)
@@ -75,6 +78,8 @@ def probe(cfg, c):
     print("jellyfin series indexed:", len(c.jellyfin.series_index()))
     if c.radarr:
         print("radarr movies:", len(c.radarr.movies()), "| trials movies root:", cfg.trials_movies_root)
+        print("radarr quality profile id:", c.radarr.quality_profile_id(cfg.quality_profile))
+        print(f"free at {cfg.trials_movies_root} (radarr): {c.radarr.free_bytes(cfg.trials_movies_root) / 1e12:.2f} TB")
     else:
         print("radarr: not configured - movie trials disabled")
     trending = c.seerr.trending_tv(pages=1)[:5]
