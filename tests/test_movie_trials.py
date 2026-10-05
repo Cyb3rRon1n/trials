@@ -113,8 +113,7 @@ def test_auto_movie_that_never_arrives_is_dropped(tmp_path):
     daily_decide(cfg, c, st, NOW + timedelta(days=cfg.arrival_days))
     assert rec["status"] == "active"                                   # not overdue yet
     lines = daily_decide(cfg, c, st, NOW + timedelta(days=cfg.arrival_days + 1))
-    assert ("delete", rec["radarr_id"], True) in c.radarr.calls and rec["status"] == "rejected"
-    assert st["rejected_movies"] == [1] and any("never arrived" in l for l in lines)
+    assert rec["status"] == "unavailable" and any("never arrived" in l for l in lines)
 
 
 def test_requested_movie_is_never_dropped_for_being_slow(tmp_path):
@@ -133,3 +132,17 @@ def test_downloaded_but_unindexed_auto_movie_is_not_dropped(tmp_path):
     c.radarr.movies_db[rec["radarr_id"]]["hasFile"] = True
     daily_decide(cfg, c, st, NOW + timedelta(days=60))
     assert rec["status"] == "active"
+
+
+def test_never_arrived_movie_is_soft_dropped_and_can_come_back_later(tmp_path):
+    from trials.jobs import _skip_set
+    cfg, c, st = world(tmp_path)
+    c.seerr.add_film(1, "Stuck")
+    weekly_add_movies(cfg, c, st, NOW)
+    rec = st["shows"]["movie:1"]
+    later = NOW + timedelta(days=cfg.arrival_days + 1)
+    daily_decide(cfg, c, st, later)
+    assert ("delete", rec["radarr_id"], False) in c.radarr.calls
+    assert rec["status"] == "unavailable" and rec["dropped_at"] == iso(later) and st.get("rejected_movies", []) == []
+    assert 1 in _skip_set(st, later + timedelta(days=29), movies=True)
+    assert 1 not in _skip_set(st, later + timedelta(days=31), movies=True)
