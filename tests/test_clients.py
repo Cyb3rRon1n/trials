@@ -12,7 +12,7 @@ class FakeTransport:
         self.calls.append((method, url, headers, body))
         for (m, prefix), (status, body) in self.routes.items():
             if m == method and url.startswith(prefix):
-                return status, (json.dumps(body).encode() if body is not None else b"")
+                return status, (body if isinstance(body, bytes) else json.dumps(body).encode() if body is not None else b"")
         return 404, b"{}"
 
 
@@ -297,3 +297,35 @@ def test_radarr_lookup_add_profile_and_free_space():
     assert (body["tmdbId"], body["qualityProfileId"], body["rootFolderPath"], body["tags"], body["monitored"]) == \
         (9, 4, "/data/media/trials", [1], True)
     assert body["addOptions"] == {"searchForMovie": True} and body["minimumAvailability"] == "released"
+
+
+def test_jellyfin_get_image_returns_bytes_or_none():
+    t = FakeTransport({("GET", "http://j/Items/i1/Images/Backdrop/0"): (200, b"\xff\xd8jpeg"),
+                       ("GET", "http://j/Items/i2/Images/Backdrop/0"): (404, b"")})
+    j = Jellyfin("http://j", "K", t)
+    assert j.get_image("i1", "Backdrop") == b"\xff\xd8jpeg" and j.get_image("i2", "Backdrop") is None
+
+
+def test_jellyfin_set_image_replaces_the_first_backdrop():
+    import base64
+    t = FakeTransport({("GET", "http://j/Items/i1"): (200, {"Id": "i1", "BackdropImageTags": ["a", "b"]}),
+                       ("DELETE", "http://j/Items/i1/Images/Backdrop/0"): (204, None),
+                       ("POST", "http://j/Items/i1/Images/Backdrop"): (204, None)})
+    Jellyfin("http://j", "K", t).set_image("i1", "Backdrop", b"NEW")
+    calls = [(m, u.split("http://j")[1]) for m, u, _, _ in t.calls]
+    # upload appends (Jellyfin ImageSaver: index = count), so: drop the old first one, upload, move it to the front
+    assert calls == [("GET", "/Items/i1"), ("DELETE", "/Items/i1/Images/Backdrop/0"), ("POST", "/Items/i1/Images/Backdrop"),
+                     ("POST", "/Items/i1/Images/Backdrop/1/Index?newIndex=0")]
+    upload = t.calls[2]
+    assert upload[3] == base64.b64encode(b"NEW") and upload[2]["Content-Type"] == "image/jpeg"
+
+
+def test_jellyfin_set_image_primary_and_first_backdrop():
+    t = FakeTransport({("GET", "http://j/Items/i1"): (200, {"Id": "i1", "BackdropImageTags": []}),
+                       ("POST", "http://j/Items/i1/Images/"): (204, None)})
+    j = Jellyfin("http://j", "K", t)
+    j.set_image("i1", "Primary", b"P", "image/png")
+    j.set_image("i1", "Backdrop", b"B")
+    calls = [(m, u.split("http://j")[1]) for m, u, _, _ in t.calls]
+    assert calls == [("POST", "/Items/i1/Images/Primary"), ("GET", "/Items/i1"), ("POST", "/Items/i1/Images/Backdrop")]
+    assert t.calls[0][2]["Content-Type"] == "image/png"

@@ -1,3 +1,4 @@
+import base64
 import json
 import urllib.error
 import urllib.parse
@@ -27,15 +28,18 @@ class Http:
         self.base, self.headers, self.transport = base.rstrip("/"), headers, transport
 
     def call(self, method, path, params=None, body=None, ok=(200, 201, 202, 204)):
+        data = None if body is None else json.dumps(body).encode()
+        _, raw = self.raw(method, path, params, data, None if body is None else "application/json", ok)
+        return json.loads(raw) if raw else None
+
+    def raw(self, method, path, params=None, data=None, ctype=None, ok=(200, 201, 202, 204)):
+        """-> (status, body bytes); for non-JSON bodies like images"""
         url = self.base + path + ("?" + urllib.parse.urlencode(params) if params else "")
-        headers, data = dict(self.headers), None
-        if body is not None:
-            data = json.dumps(body).encode()
-            headers["Content-Type"] = "application/json"
+        headers = dict(self.headers, **({"Content-Type": ctype} if ctype else {}))
         status, raw = self.transport(method, url, headers, data)
         if status not in ok:
             raise ApiError(f"{method} {path} -> HTTP {status}: {raw[:200]!r}")
-        return json.loads(raw) if raw else None
+        return status, raw
 
 
 def _covers(root, path):
@@ -265,6 +269,27 @@ class Jellyfin:
             item["Overview"] = overview
         item["LockedFields"] = locked
         self.http.call("POST", f"/Items/{item_id}", body=item)
+
+    def get_image(self, item_id, image_type, index=0):
+        """the item's stored image as bytes, or None if it has none of this type"""
+        status, data = self.http.raw("GET", f"/Items/{item_id}/Images/{image_type}/{index}", ok=(200, 404))
+        return data if status == 200 else None
+
+    def set_image(self, item_id, image_type, data, ctype="image/jpeg"):
+        """make `data` the item's first image of this type (body is base64, Jellyfin's quirk). An upload
+        APPENDS a backdrop (ImageSaver: index = count), so the old first one is deleted and the new one
+        moved to the front - other backdrops stay as they were"""
+        body = base64.b64encode(data)
+        if image_type != "Backdrop":
+            self.http.raw("POST", f"/Items/{item_id}/Images/{image_type}", data=body, ctype=ctype)
+            return
+        n = len(self.http.call("GET", f"/Items/{item_id}").get("BackdropImageTags") or [])
+        if n:
+            self.http.call("DELETE", f"/Items/{item_id}/Images/Backdrop/0")
+            n -= 1
+        self.http.raw("POST", f"/Items/{item_id}/Images/Backdrop", data=body, ctype=ctype)
+        if n:
+            self.http.call("POST", f"/Items/{item_id}/Images/Backdrop/{n}/Index", {"newIndex": 0})
 
     def notify_paths(self, created=(), deleted=()):
         ups = [{"Path": p, "UpdateType": "Created"} for p in created] + \
