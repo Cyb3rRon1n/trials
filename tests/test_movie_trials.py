@@ -103,3 +103,33 @@ def test_auto_movie_is_voted_on_then_kept_or_dropped(tmp_path):
     assert ("move", good["radarr_id"], cfg.movies_root) in c.radarr.calls and good["status"] == "moving"
     assert ("delete", bad["radarr_id"], True) in c.radarr.calls and st["rejected_movies"] == [2]
     assert any(l.startswith("KEPT Film 1 (2026)") for l in lines)
+
+
+def test_auto_movie_that_never_arrives_is_dropped(tmp_path):
+    cfg, c, st = world(tmp_path)
+    c.seerr.add_film(1, "Stuck")
+    weekly_add_movies(cfg, c, st, NOW)
+    rec = st["shows"]["movie:1"]
+    daily_decide(cfg, c, st, NOW + timedelta(days=cfg.arrival_days))
+    assert rec["status"] == "active"                                   # not overdue yet
+    lines = daily_decide(cfg, c, st, NOW + timedelta(days=cfg.arrival_days + 1))
+    assert ("delete", rec["radarr_id"], True) in c.radarr.calls and rec["status"] == "rejected"
+    assert st["rejected_movies"] == [1] and any("never arrived" in l for l in lines)
+
+
+def test_requested_movie_is_never_dropped_for_being_slow(tmp_path):
+    cfg, c, st = world(tmp_path)
+    c.radarr.add(40, 555, "Asked For", f"{cfg.trials_movies_root}/Asked For (2026)", has_file=False)
+    daily_decide(cfg, c, st, NOW)
+    daily_decide(cfg, c, st, NOW + timedelta(days=60))
+    assert st["shows"]["movie:555"]["status"] == "active" and 40 in c.radarr.movies_db
+
+
+def test_downloaded_but_unindexed_auto_movie_is_not_dropped(tmp_path):
+    cfg, c, st = world(tmp_path)
+    c.seerr.add_film(1, "Unindexed")
+    weekly_add_movies(cfg, c, st, NOW)
+    rec = st["shows"]["movie:1"]
+    c.radarr.movies_db[rec["radarr_id"]]["hasFile"] = True
+    daily_decide(cfg, c, st, NOW + timedelta(days=60))
+    assert rec["status"] == "active"

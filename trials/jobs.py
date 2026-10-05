@@ -495,7 +495,8 @@ def apply_drop(c, st, rec, s, why, now):
         c.radarr.delete_movie(s["id"], exclude=True)
         rec["status"] = "rejected"
         st.setdefault("rejected_movies", []).append(rec["tmdb"])
-        return f"REJECTED {rec['title']} ({why}) - deleted" + _notify_jellyfin(c, deleted=[s["path"]])
+        msg = f"DROPPED {rec['title']}: never arrived - deleted" if unavailable else f"REJECTED {rec['title']} ({why}) - deleted"
+        return msg + _notify_jellyfin(c, deleted=[s["path"]])
     c.sonarr.delete_series(s["id"], exclude=not unavailable)
     if unavailable:
         rec.update(status="unavailable", dropped_at=iso(now))
@@ -566,6 +567,8 @@ def _decide_movie(cfg, c, rec, movies, movie_index, mtag, users, now, keeps, dro
             _open_window(cfg, c, rec, jf["Id"], users, now, lines)
         elif m.get("hasFile"):
             lines.append(f"{rec['title']}: file present but Jellyfin hasn't indexed it yet - waiting")
+        elif rec.get("kind") == "auto" and now - parse(rec["added_at"]) > timedelta(days=cfg.arrival_days):
+            drops.append((rec, m, "unavailable"))   # a weekly pick that never came; a request just waits
         return
     if now < parse(rec["window_start"]) + timedelta(days=cfg.window_days):
         if jf:
