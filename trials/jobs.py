@@ -121,13 +121,16 @@ def _notify_jellyfin(c, created=(), deleted=()):
         return f" (Jellyfin not notified: {e})"
 
 
-def _skip_set(st, now):
-    skip = set(st["rejected"])
+def _skip_set(st, now, movies=False):
+    """tvdb ids (or, for movies, tmdb ids) never to add again: rejected or already trialled"""
+    skip = set(st.get("rejected_movies", []) if movies else st["rejected"])
     for key, rec in st["shows"].items():
+        if is_movie(rec) != movies:
+            continue
         dropped = rec.get("dropped_at")
         if rec.get("status") == "unavailable" and dropped and now - parse(dropped) > UNAVAILABLE_COOLDOWN:
             continue
-        skip.add(int(key))
+        skip.add(int(key.split(":")[-1]))
     return skip
 
 

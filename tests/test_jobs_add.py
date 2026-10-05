@@ -123,3 +123,12 @@ def test_trial_is_first_half_of_season_1_rounded_up():
     det["lastEpisodeToAir"]["episodeNumber"] = 6
     assert aired_enough(det)
     assert not aired_enough({"lastEpisodeToAir": {"seasonNumber": 2, "episodeNumber": 1}})   # no season info
+
+
+def test_movie_trial_in_state_does_not_break_the_show_add(tmp_path):
+    cfg, c, st = setup(tmp_path)
+    st["shows"]["movie:555"] = {"tmdb": 555, "media": "movie", "status": "active"}
+    c.seerr.add_show(5, 1005, "Plain Show")
+    c.sonarr.lookups[1005] = {"title": "Plain Show", "tvdbId": 1005}
+    weekly_add(cfg, c, st, NOW)
+    assert "1005" in st["shows"]
