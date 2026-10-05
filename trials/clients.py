@@ -43,7 +43,8 @@ def _covers(root, path):
     return root == "" or path == root or path.startswith(root + "/")
 
 
-class Sonarr:
+class Arr:
+    """what Sonarr and Radarr share (same v3 API shapes)"""
     def __init__(self, url, key, transport=urllib_transport):
         self.http = Http(url.rstrip("/") + "/api/v3", {"X-Api-Key": key}, transport)
 
@@ -57,7 +58,19 @@ class Sonarr:
         for p in self.http.call("GET", "/qualityprofile"):
             if p["name"] == name:
                 return p["id"]
-        raise ApiError(f"Sonarr quality profile {name!r} not found")
+        raise ApiError(f"{type(self).__name__} quality profile {name!r} not found")
+
+    def free_bytes(self, path):
+        best = None
+        for d in self.http.call("GET", "/diskspace"):
+            if _covers(d["path"], path) and (best is None or len(d["path"].rstrip("/")) > len(best["path"].rstrip("/"))):
+                best = d
+        if best is None:
+            raise ApiError(f"no {type(self).__name__} diskspace entry covers {path}")
+        return int(best["freeSpace"])
+
+
+class Sonarr(Arr):
 
     def series(self):
         return self.http.call("GET", "/series")
@@ -95,15 +108,6 @@ class Sonarr:
         if ids:
             self.http.call("POST", "/command", body={"name": "EpisodeSearch", "episodeIds": list(ids)})
 
-    def free_bytes(self, path):
-        best = None
-        for d in self.http.call("GET", "/diskspace"):
-            if _covers(d["path"], path) and (best is None or len(d["path"].rstrip("/")) > len(best["path"].rstrip("/"))):
-                best = d
-        if best is None:
-            raise ApiError(f"no Sonarr diskspace entry covers {path}")
-        return int(best["freeSpace"])
-
     def move_series(self, sid, root):
         s = self.get_series(sid)
         s["rootFolderPath"] = root
@@ -138,21 +142,20 @@ class Sonarr:
                        {"deleteFiles": "true", "addImportListExclusion": "true" if exclude else "false"})
 
 
-class Radarr:
-    def __init__(self, url, key, transport=urllib_transport):
-        self.http = Http(url.rstrip("/") + "/api/v3", {"X-Api-Key": key}, transport)
-
-    def tag_id(self, label):
-        for t in self.http.call("GET", "/tag"):
-            if t["label"] == label:
-                return t["id"]
-        return self.http.call("POST", "/tag", body={"label": label})["id"]
-
+class Radarr(Arr):
     def movies(self):
         return self.http.call("GET", "/movie")
 
     def get_movie(self, mid):
         return self.http.call("GET", f"/movie/{mid}")
+
+    def lookup_tmdb(self, tmdb):
+        return self.http.call("GET", "/movie/lookup/tmdb", {"tmdbId": tmdb})
+
+    def add_movie(self, lookup, profile_id, root, tag_id):
+        body = dict(lookup, qualityProfileId=profile_id, rootFolderPath=root, tags=[tag_id], monitored=True,
+                    minimumAvailability="released", addOptions={"searchForMovie": True})
+        return self.http.call("POST", "/movie", body=body)
 
     def add_tag(self, mid, tag_id):
         m = self.get_movie(mid)
@@ -297,6 +300,23 @@ class Seerr:
 
     def tv(self, tmdb):
         return self.http.call("GET", f"/tv/{tmdb}")
+
+    def trending_movies(self, pages=3):
+        out = []
+        for page in range(1, pages + 1):
+            out += [r for r in self.http.call("GET", "/discover/trending", {"page": page})["results"]
+                    if r.get("mediaType") == "movie"]
+        return out
+
+    def popular_movies(self, pages=2):
+        out = []
+        for page in range(1, pages + 1):
+            out += [dict(r, mediaType="movie") for r in self.http.call("GET", "/discover/movies", {"page": page})["results"]]
+        return out
+
+    def movie(self, tmdb):
+        """details incl. `releases` = TMDb release_dates: results[].release_dates[] {type, release_date}"""
+        return self.http.call("GET", f"/movie/{tmdb}")
 
     def requested_since(self, tmdb, since_iso):
         r = self.http.call("GET", "/request", {"take": 100, "skip": 0, "sort": "added", "filter": "all"})
