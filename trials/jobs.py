@@ -358,6 +358,11 @@ def _art_dir(cfg):
     return os.path.join(os.path.dirname(cfg.state_path) or ".", "art")
 
 
+def _copies(folder, item, kind):
+    """saved originals of this item's artwork (not a half-written .tmp)"""
+    return [p for p in glob.glob(os.path.join(folder, f"{item}-{kind}.*")) if not p.endswith(".tmp")]
+
+
 def _save_orig(path, data):
     with open(path + ".tmp", "wb") as f:
         f.write(data)
@@ -374,23 +379,29 @@ def _qr_badge(cfg, c, rec, jf_id, lines):
     try:
         from . import art   # Pillow is only loaded when this is used
         if qr:
-            current = c.jellyfin.get_image(jf_id, qr["type"])
-            if not current or hashlib.sha256(current).hexdigest() == qr.get("sha"):
+            kind, current = qr["type"], c.jellyfin.get_image(jf_id, qr["type"])
+            if not current:   # removed by hand, or a half-failed upload: put the badge back
+                path = _orig_file(qr)
+                if not path:
+                    lines.append(f"{rec['title']}: artwork gone from Jellyfin and original artwork file missing: {qr['orig']}")
+                    return
+                with open(path, "rb") as f:
+                    orig = f.read()
+                lines.append(f"{rec['title']}: its artwork was gone from Jellyfin - vote QR re-added")
+            elif hashlib.sha256(current).hexdigest() == qr.get("sha"):
                 return
-            if art.has_badge(current):   # still ours, just re-encoded somewhere: not new artwork
+            elif art.has_badge(current):   # still ours, just re-encoded somewhere: not new artwork
                 qr["sha"] = hashlib.sha256(current).hexdigest()
                 return
-            # Jellyfin replaced it (metadata refresh): that's the original now
-            kind, orig = qr["type"], current
-            path = os.path.join(_art_dir(cfg), f"{jf_id}-{kind}.{art.ext_of(orig)}")
-            _save_orig(path, orig)
-            if path != qr["orig"] and os.path.exists(qr["orig"]):
-                os.remove(qr["orig"])
+            else:   # Jellyfin replaced it (metadata refresh): that's the original now
+                orig, path = current, os.path.join(_art_dir(cfg), f"{jf_id}-{kind}.{art.ext_of(current)}")
+                _save_orig(path, orig)
+                qr["orig"] = path   # before badging/uploading, which can fail; an older copy is just left behind
         else:
             os.makedirs(_art_dir(cfg), exist_ok=True)
             for kind in ("Backdrop", "Primary"):
                 # an original saved by an earlier, interrupted run wins: Jellyfin may already show the badge
-                saved = glob.glob(os.path.join(_art_dir(cfg), f"{jf_id}-{kind}.*"))
+                saved = _copies(_art_dir(cfg), jf_id, kind)
                 if saved:
                     path = saved[0]
                     with open(path, "rb") as f:
@@ -412,22 +423,32 @@ def _qr_badge(cfg, c, rec, jf_id, lines):
         lines.append(f"{rec['title']}: couldn't add the vote QR to its artwork: {e}")
 
 
+def _orig_file(qr):
+    """the saved original: the recorded file, else the newest <item>-<type>.* copy next to it"""
+    if os.path.exists(qr["orig"]):
+        return qr["orig"]
+    copies = _copies(os.path.dirname(qr["orig"]), qr["item"], qr["type"])
+    return max(copies, key=os.path.getmtime) if copies else None
+
+
 def _qr_restore(c, rec, item_id):
-    """Put the original artwork back on `item_id` (None: the item is gone) and delete the saved copy.
-    Returns a problem to report, or "" - a failure keeps the file so nothing is lost."""
+    """Put the original artwork back on `item_id` (None: the item is gone) and delete the saved copies.
+    Returns a problem to report, or "" - a failure keeps the files so nothing is lost."""
     qr = rec.get("qr")
     if not qr:
         return ""
-    try:
-        if qr.get("orig"):
+    if qr.get("orig"):
+        path = _orig_file(qr)
+        if not path:
+            return f" (original artwork file missing: {qr['orig']})"
+        try:
             if item_id:
-                with open(qr["orig"], "rb") as f:
-                    c.jellyfin.set_image(item_id, qr["type"], f.read(), mimetypes.guess_type(qr["orig"])[0] or "image/jpeg")
-            os.remove(qr["orig"])
-    except FileNotFoundError:
-        pass
-    except Exception as e:
-        return f" (original artwork not put back, it's in {qr['orig']}: {e})"
+                with open(path, "rb") as f:
+                    c.jellyfin.set_image(item_id, qr["type"], f.read(), mimetypes.guess_type(path)[0] or "image/jpeg")
+            for old in _copies(os.path.dirname(path), qr["item"], qr["type"]):
+                os.remove(old)
+        except Exception as e:
+            return f" (original artwork not put back, it's in {path}: {e})"
     rec["qr"] = None
     return ""
 

@@ -197,3 +197,67 @@ def test_refresh_check_failure_is_tolerated(tmp_path):
     c.jellyfin.image_fails = True
     lines = daily_decide(cfg, c, st, NOW + timedelta(days=1))
     assert rec["qr"] == before and rec["status"] == "active" and any("vote QR" in l for l in lines)
+
+
+def png(color=(5, 120, 5)):
+    buf = io.BytesIO()
+    Image.new("RGB", (640, 360), color).save(buf, "PNG")
+    return buf.getvalue()
+
+
+def release(c, rec):
+    c.sonarr.series_db[rec["sonarr_id"]]["tags"] = []
+
+
+def test_upload_failure_mid_re_badge_keeps_the_newest_original(tmp_path):
+    cfg, c, st, rec = world(tmp_path)
+    daily_decide(cfg, c, st, NOW)
+    first = rec["qr"]["orig"]
+    c.jellyfin.images[("jf1", "Backdrop")] = png()                                   # refreshed, now a PNG
+    c.jellyfin.upload_fails = True
+    lines = daily_decide(cfg, c, st, NOW + timedelta(days=1))
+    assert any("vote QR" in l for l in lines)
+    assert rec["qr"]["orig"].endswith("jf1-Backdrop.png") and open(rec["qr"]["orig"], "rb").read() == png()
+    assert os.path.exists(first)                                                      # old one never deleted here
+    c.jellyfin.upload_fails = False
+    c.jellyfin.images[("jf1", "Backdrop")] = b"something else entirely"
+    release(c, rec)
+    daily_decide(cfg, c, st, NOW + timedelta(days=2))
+    assert c.jellyfin.images[("jf1", "Backdrop")] == png() and rec["qr"] is None
+    assert os.listdir(art_dir(cfg)) == []                                             # stale copies cleaned up too
+
+
+def test_restore_falls_back_to_any_saved_copy(tmp_path):
+    cfg, c, st, rec = world(tmp_path)
+    daily_decide(cfg, c, st, NOW)
+    os.rename(rec["qr"]["orig"], rec["qr"]["orig"][:-4] + ".webp")
+    release(c, rec)
+    daily_decide(cfg, c, st, NOW + timedelta(days=1))
+    assert c.jellyfin.images[("jf1", "Backdrop")] == jpeg() and rec["qr"] is None
+
+
+def test_restore_reports_a_missing_original(tmp_path):
+    cfg, c, st, rec = world(tmp_path)
+    daily_decide(cfg, c, st, NOW)
+    os.remove(rec["qr"]["orig"])
+    release(c, rec)
+    lines = daily_decide(cfg, c, st, NOW + timedelta(days=1))
+    assert any("original artwork file missing: " + os.path.join(art_dir(cfg), "jf1-Backdrop.jpg") in l for l in lines)
+
+
+def test_badge_gone_from_jellyfin_is_put_back(tmp_path):
+    cfg, c, st, rec = world(tmp_path)
+    daily_decide(cfg, c, st, NOW)
+    del c.jellyfin.images[("jf1", "Backdrop")]                                       # removed by hand, or a half-failed upload
+    lines = daily_decide(cfg, c, st, NOW + timedelta(days=1))
+    now_shown = c.jellyfin.images[("jf1", "Backdrop")]
+    assert rec["qr"]["sha"] == sha(now_shown) and any("re-added" in l for l in lines)
+    assert open(rec["qr"]["orig"], "rb").read() == jpeg()
+
+
+def test_a_half_written_copy_is_never_taken_for_the_original(tmp_path):
+    cfg, c, st, rec = world(tmp_path)
+    os.makedirs(art_dir(cfg))
+    open(os.path.join(art_dir(cfg), "jf1-Backdrop.jpg.tmp"), "wb").write(b"half")
+    daily_decide(cfg, c, st, NOW)
+    assert open(rec["qr"]["orig"], "rb").read() == jpeg()
