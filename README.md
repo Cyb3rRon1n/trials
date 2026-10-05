@@ -19,6 +19,11 @@ keep it permanently (a kept show follows future seasons too) or drop it. ♥ cou
 finished it (3 episodes, or all there were) counts as a keep. Kept titles move to their permanent
 library with everyone's watch history; dropped ones are deleted.
 
+**Voting from the TV.** Roku / Android TV apps have no 👍/👎, so when voting opens the trial's backdrop
+(or poster, if it has none) gets a "Scan to vote" QR in the corner that opens that title on the vote
+page (`TRIALS_PUBLIC_URL/?t=<key>`). The original artwork is saved next to the state file (`art/`) and
+put back when the trial ends. `QR_ART=0` turns this off.
+
 Design: `docs/superpowers/specs/2026-09-25-trial-shows-design.md`.
 
 ## Run
