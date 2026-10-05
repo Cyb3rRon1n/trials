@@ -41,6 +41,7 @@ class Config:
     movies_root: str = "/data/media/movies"
     admins: str = "adriel,bobby"          # Jellyfin usernames who can override a vote
     backups_dir: str = "/backups"         # userdata-export snapshots (read-only mount)
+    qr_art: bool = True                   # put a "scan to vote" QR on trial artwork (TV apps have no 👍/👎)
 
     def is_admin(self, user):
         names = {n.strip().lower() for n in self.admins.split(",") if n.strip()}
