@@ -22,7 +22,7 @@ One small Python service (`trials`), a single container in the cyberpac stack. I
    - Add the top **3** to Sonarr with tag `trial` under the root folder **`/data/media/trials`**. Monitor only **S01E01–E03**, and search for them.
    - Record each show in the state file with `added_at`.
    - Skip the whole week if `/mnt/media` has less than **1 TB** free.
-2. **Voting page**: `trials.totallylegitmedia.us`, behind Authelia, with a Homepage tile.
+2. **Voting page**: `trials.example.com`, behind Authelia, with a Homepage tile.
    - Users sign in with their **Jellyfin username and password** (`/Users/AuthenticateByName`), so there is one vote per real account.
    - For each trial it lists the poster, days left, **your own** current vote, 👍/👎 buttons (no live tally: it would cost ~80 Jellyfin calls per page load), and a "watch in Jellyfin" link.
    - A vote writes Jellyfin's per-user `Likes` field (`POST /UserItems/{itemId}/Rating?likes=true|false`). There is no separate vote database.

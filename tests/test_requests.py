@@ -81,9 +81,9 @@ def test_admin_override_decides_immediately(tmp_path):
     cfg, c, st = world(tmp_path)
     sid = requested_show(c)
     daily_decide(cfg, c, st, NOW)
-    st["shows"]["7001"]["override"] = {"verdict": "drop", "by": "bobby"}
+    st["shows"]["7001"]["override"] = {"verdict": "drop", "by": "bob"}
     lines = daily_decide(cfg, c, st, NOW)
-    assert ("delete", sid, True) in c.sonarr.calls and any("overruled by bobby" in l for l in lines)
+    assert ("delete", sid, True) in c.sonarr.calls and any("overruled by bob" in l for l in lines)
 
 
 def test_movie_request_trial_keep_and_drop(tmp_path):
@@ -125,7 +125,7 @@ def test_kept_movie_gets_watched_status_back_after_the_move(tmp_path):
 
 def test_movie_favorite_outvotes_two_thumbs_down(tmp_path):
     cfg, c, st = world(tmp_path)
-    c.jellyfin.users_list.append({"Id": "u3", "Name": "palma"})
+    c.jellyfin.users_list.append({"Id": "u3", "Name": "carol"})
     c.radarr.add(40, 555, "Loved Film", f"{cfg.trials_movies_root}/Loved Film (2026)")
     daily_decide(cfg, c, st, NOW)
     c.jellyfin.movies = {f"{cfg.trials_movies_root}/Loved Film (2026)": {"Id": "m1"}}

@@ -639,8 +639,8 @@ def test_sonarr_tag_id_creates_when_missing():
 
 
 def test_jellyfin_auth_header_and_authenticate():
-    ok = FakeTransport({("POST", "http://j/Users/AuthenticateByName"): (200, {"User": {"Id": "u1", "Name": "adriel", "Policy": {"IsAdministrator": True}}})})
-    assert Jellyfin("http://j", "K", ok).authenticate("adriel", "pw") == {"id": "u1", "name": "adriel", "admin": True}
+    ok = FakeTransport({("POST", "http://j/Users/AuthenticateByName"): (200, {"User": {"Id": "u1", "Name": "alice", "Policy": {"IsAdministrator": True}}})})
+    assert Jellyfin("http://j", "K", ok).authenticate("alice", "pw") == {"id": "u1", "name": "alice", "admin": True}
     assert 'Client="trials"' in ok.calls[0][2]["Authorization"]
     bad = FakeTransport({("POST", "http://j/Users/AuthenticateByName"): (401, None)})
     assert Jellyfin("http://j", "K", bad).authenticate("x", "y") is None
@@ -1015,7 +1015,7 @@ class FakeSonarr:
 
 class FakeJellyfin:
     def __init__(self):
-        self.users_list = [{"Id": "u1", "Name": "adriel"}, {"Id": "u2", "Name": "bobby"}]
+        self.users_list = [{"Id": "u1", "Name": "alice"}, {"Id": "u2", "Name": "bob"}]
         self.index, self.eps, self.like, self.calls = {}, {}, {}, []
 
     def users(self):
@@ -1044,8 +1044,8 @@ class FakeJellyfin:
         self.calls.append(("notify", tuple(created), tuple(deleted)))
 
     def authenticate(self, username, password):
-        users = {("adriel", "pw"): {"id": "u1", "name": "adriel", "admin": True},
-                 ("bobby", "pw"): {"id": "u2", "name": "bobby", "admin": False}}
+        users = {("alice", "pw"): {"id": "u1", "name": "alice", "admin": True},
+                 ("bob", "pw"): {"id": "u2", "name": "bob", "admin": False}}
         return users.get((username, password))
 
 
@@ -1650,13 +1650,13 @@ def test_healthz_and_login_required(app):
 
 def test_bad_login(app):
     _, _, port = app
-    status, cookie, body = req(port, "POST", "/login", {"username": "bobby", "password": "nope"})
+    status, cookie, body = req(port, "POST", "/login", {"username": "bob", "password": "nope"})
     assert status == 200 and cookie is None and "Wrong username or password" in body
 
 
 def test_list_escapes_and_vote_up(app):
     cfg, c, port = app
-    cookie = login(port, "bobby")
+    cookie = login(port, "bob")
     body = req(port, "GET", "/", cookie=cookie)[2]
     assert "Plain &lt;Show&gt;" in body and "vote by" in body.lower()
     assert req(port, "POST", "/vote", {"item": "jf1", "value": "up"}, cookie)[0] == 303
@@ -1665,15 +1665,15 @@ def test_list_escapes_and_vote_up(app):
 
 def test_vote_rejects_non_trial_item(app):
     cfg, c, port = app
-    cookie = login(port, "bobby")
+    cookie = login(port, "bob")
     assert req(port, "POST", "/vote", {"item": "some-other-show", "value": "down"}, cookie)[0] == 400
     assert c.jellyfin.calls == []
 
 
 def test_unreject_admin_only(app):
     cfg, c, port = app
-    assert req(port, "POST", "/unreject", {"tvdb": "2002"}, login(port, "bobby"))[0] == 403
-    assert req(port, "POST", "/unreject", {"tvdb": "2002"}, login(port, "adriel"))[0] == 303
+    assert req(port, "POST", "/unreject", {"tvdb": "2002"}, login(port, "bob"))[0] == 403
+    assert req(port, "POST", "/unreject", {"tvdb": "2002"}, login(port, "alice"))[0] == 303
     st = state.load(cfg.state_path)
     assert st["rejected"] == [] and "2002" not in st["shows"]
 ```
@@ -2118,7 +2118,7 @@ This is the service stanza for cyberpac's `~/vulcan/stack/docker-compose.overrid
 
 ```yaml
 - Trial Shows:
-    href: https://trials.totallylegitmedia.us
+    href: https://trials.example.com
     icon: mdi-thumbs-up-down
     description: Vote to keep or drop this week's trial shows (Trials library in Jellyfin)
     siteMonitor: http://trials:8080/healthz
@@ -2209,7 +2209,7 @@ SONARR_URL=http://sonarr:8989
 SONARR_KEY=$S
 JELLYFIN_URL=http://jellyfin:8096
 JELLYFIN_KEY=<paste the trials key from Step 3>
-JELLYFIN_PUBLIC_URL=https://jellyfin.totallylegitmedia.us
+JELLYFIN_PUBLIC_URL=https://jellyfin.example.com
 NTFY_TOPIC=$T
 TRIALS_ENFORCE=0
 EOF
@@ -2224,7 +2224,7 @@ Also check Sonarr's quality profile names: if `HD-1080p` doesn't exist, add `QUA
 
 Print Seerr's labels as the template:
 `ssh 192.168.10.157 "docker inspect seerr --format '{{json .Config.Labels}}' | python3 -m json.tool | grep traefik"`
-Append `deploy/compose-snippet.yml` under `services:` in `~/vulcan/stack/docker-compose.override.yml`. Add a `labels:` list that copies every `traefik.*` label from Seerr, with `seerr` replaced by `trials` in router and service names, the `Host(...)` rule set to `trials.totallylegitmedia.us`, and `loadbalancer.server.port=8080`. **Include** the Authelia middleware label: if Seerr's labels exclude Authelia (Seerr was deliberately excluded), take the `middlewares` label from `docker inspect sonarr` instead.
+Append `deploy/compose-snippet.yml` under `services:` in `~/vulcan/stack/docker-compose.override.yml`. Add a `labels:` list that copies every `traefik.*` label from Seerr, with `seerr` replaced by `trials` in router and service names, the `Host(...)` rule set to `trials.example.com`, and `loadbalancer.server.port=8080`. **Include** the Authelia middleware label: if Seerr's labels exclude Authelia (Seerr was deliberately excluded), take the `middlewares` label from `docker inspect sonarr` instead.
 
 - [ ] **Step 6: Start it and run the read-only probe**
 
@@ -2235,7 +2235,7 @@ Expected: container `Up (healthy)`. The probe prints the Sonarr series count, th
 
 - [ ] **Step 7: Verify the web page**
 
-`curl -s -o /dev/null -w "%{http_code}\n" https://trials.totallylegitmedia.us` should give `302` (to Authelia). Then in a browser: sign in through Authelia, then Jellyfin login, and confirm "No shows on trial right now."
+`curl -s -o /dev/null -w "%{http_code}\n" https://trials.example.com` should give `302` (to Authelia). Then in a browser: sign in through Authelia, then Jellyfin login, and confirm "No shows on trial right now."
 Add `deploy/homepage-snippet.yaml` to `~/vulcan/stack/config/homepage/services.yaml`, with the topic from Step 4, and check the tile renders.
 
 - [ ] **Step 8: First weekly add (ask the user first)**

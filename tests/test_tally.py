@@ -16,7 +16,7 @@ def world(tmp_path, **kw):
     for e in c.sonarr.eps[rec["sonarr_id"]][:4]:
         e["hasFile"] = True
     c.jellyfin.index[rec["path"]] = {"Id": "jf1"}
-    c.jellyfin.users_list.append({"Id": "u3", "Name": "palma"})
+    c.jellyfin.users_list.append({"Id": "u3", "Name": "carol"})
     c.jellyfin.udata[("jf1", "u1")] = {"IsFavorite": True}                          # ♥ = 2 keep
     c.jellyfin.like[("jf1", "u2")] = False                                         # 👎
     c.jellyfin.eps[("jf1", "u3")] = [ep(f"e{i}", i, played=True) for i in (1, 2, 3)]  # finished 3, no vote: keep
@@ -29,7 +29,7 @@ def test_tally_during_the_window_counts_only(tmp_path):
     daily_decide(cfg, c, st, NOW + timedelta(days=1))
     assert rec["tally"] == {"keep": 3, "drop": 1, "voters": 3, "at": iso(NOW + timedelta(days=1))}
     assert rec["played"] is None                      # no snapshot taken during the window
-    assert not any(u in str(rec["tally"]) for u in ("u1", "u2", "u3", "adriel", "bobby", "palma"))
+    assert not any(u in str(rec["tally"]) for u in ("u1", "u2", "u3", "alice", "bob", "carol"))
 
 
 def test_no_tally_before_voting_opens_or_after_it_ends(tmp_path):

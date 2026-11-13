@@ -39,7 +39,7 @@ class Config:
     radarr_key: str = ""
     trials_movies_root: str = "/data/media/trials"   # movies share the trials folder: one mixed "On Trial" library
     movies_root: str = "/data/media/movies"
-    admins: str = "adriel,bobby"          # Jellyfin usernames who can override a vote
+    admins: str = ""                      # ADMINS=name1,name2: Jellyfin usernames who can override a vote (Jellyfin admins always can)
     backups_dir: str = "/backups"         # userdata-export snapshots (read-only mount)
     qr_art: bool = True                   # put a "scan to vote" QR on trial artwork (TV apps have no 👍/👎)
 

@@ -34,7 +34,8 @@ Design: `docs/superpowers/specs/2026-09-25-trial-shows-design.md`.
 
 Configuration is by environment variable (see `trials/config.py`). `TRIALS_ENFORCE=0`
 (the default) means decisions are only reported, never carried out, and new movie trials are only
-listed, not added (new show trials still are).
+listed, not added (new show trials still are). `ADMINS=name1,name2` lets those Jellyfin users
+override a vote (Jellyfin administrators always can).
 
 ## Operating it
 

@@ -760,7 +760,7 @@ def daily_decide(cfg, c, st, now, lines=None):
             lines.append(f"{rec['title']}: no longer a trial in Sonarr (tag removed or series deleted) - left alone"
                          + _qr_restore(c, rec, (rec.get("qr") or {}).get("item") if s and s.get("tvdbId") == rec["tvdb"] else None))
             continue
-        if rec.get("override"):   # an admin (adriel / bobby) overruled the vote
+        if rec.get("override"):   # an admin overruled the vote
             (keeps if rec["override"]["verdict"] == "keep" else drops).append((rec, s, f"overruled by {rec['override']['by']}"))
             continue
         eps = c.sonarr.episodes(s["id"])

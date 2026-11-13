@@ -65,7 +65,7 @@ def test_verdict_counts_any_season_1_episode(tmp_path):
     cfg, c, st, rec, sid = world(tmp_path)
     voting_over(c, rec, sid)
     eps = lambda *played: [ep(f"e{i}", i, played=i in played) for i in range(1, 5)]
-    c.jellyfin.users_list.append({"Id": "u3", "Name": "palma"})
+    c.jellyfin.users_list.append({"Id": "u3", "Name": "carol"})
     c.jellyfin.eps[("jf1", "u1")] = eps(2, 3, 4)        # finished 3 (not E01-03): like
     c.jellyfin.eps[("jf1", "u2")] = eps(4)              # only finished 1: dislike
     c.jellyfin.eps[("jf1", "u3")] = eps()

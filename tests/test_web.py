@@ -52,13 +52,13 @@ def test_healthz_and_login_required(app):
 
 def test_bad_login(app):
     _, _, port = app
-    status, cookie, body = req(port, "POST", "/login", {"username": "bobby", "password": "nope"})
+    status, cookie, body = req(port, "POST", "/login", {"username": "bob", "password": "nope"})
     assert status == 200 and cookie is None and "Wrong username or password" in body
 
 
 def test_list_escapes_and_vote_up(app):
     cfg, c, port = app
-    cookie = login(port, "bobby")
+    cookie = login(port, "bob")
     body = req(port, "GET", "/", cookie=cookie)[2]
     assert "Plain &lt;Show&gt;" in body and "vote by" in body.lower()
     assert "all of season 1" in body and "future seasons included" in body and "21-day" in body
@@ -68,22 +68,22 @@ def test_list_escapes_and_vote_up(app):
 
 def test_vote_rejects_non_trial_item(app):
     cfg, c, port = app
-    cookie = login(port, "bobby")
+    cookie = login(port, "bob")
     assert req(port, "POST", "/vote", {"item": "some-other-show", "value": "down"}, cookie)[0] == 400
     assert c.jellyfin.calls == []
 
 
 def test_unreject_admin_only(app):
     cfg, c, port = app
-    assert req(port, "POST", "/unreject", {"tvdb": "2002"}, login(port, "palma"))[0] == 403
-    assert req(port, "POST", "/unreject", {"tvdb": "2002"}, login(port, "bobby"))[0] == 303
+    assert req(port, "POST", "/unreject", {"tvdb": "2002"}, login(port, "carol"))[0] == 403
+    assert req(port, "POST", "/unreject", {"tvdb": "2002"}, login(port, "bob"))[0] == 303
     st = state.load(cfg.state_path)
     assert st["rejected"] == [] and "2002" not in st["shows"]
 
 
 def test_unreject_active_show_is_left_untouched(app):
     cfg, c, port = app
-    status, _, _ = req(port, "POST", "/unreject", {"tvdb": "1005"}, login(port, "adriel"))
+    status, _, _ = req(port, "POST", "/unreject", {"tvdb": "1005"}, login(port, "alice"))
     assert status == 303
     st = state.load(cfg.state_path)
     assert st["shows"]["1005"]["status"] == "active"
@@ -91,7 +91,7 @@ def test_unreject_active_show_is_left_untouched(app):
 
 def test_jellyfin_outage_returns_503(app):
     cfg, c, port = app
-    cookie = login(port, "bobby")
+    cookie = login(port, "bob")
     c.jellyfin.series_index = lambda: (_ for _ in ()).throw(RuntimeError("connection refused"))
     status, _, body = req(port, "GET", "/", cookie=cookie)
     assert status == 503 and "unreachable" in body.lower()
@@ -100,7 +100,7 @@ def test_jellyfin_outage_returns_503(app):
 
 def test_logout_invalidates_session(app):
     cfg, c, port = app
-    cookie = login(port, "bobby")
+    cookie = login(port, "bob")
     assert req(port, "POST", "/logout", cookie=cookie)[0] == 303
     status, _, body = req(port, "GET", "/", cookie=cookie)
     assert status == 200 and 'name="password"' in body
@@ -117,12 +117,12 @@ def test_admin_override_records_and_triggers_a_run(tmp_path):
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     port = srv.server_address[1]
     try:
-        assert req(port, "POST", "/override", {"key": "1005", "verdict": "drop"}, login(port, "palma"))[0] == 403
-        assert req(port, "POST", "/override", {"key": "1005", "verdict": "drop"}, login(port, "bobby"))[0] == 303
-        assert state.load(cfg.state_path)["shows"]["1005"]["override"]["by"] == "bobby" and ran == [1]
-        page = req(port, "GET", "/", cookie=login(port, "adriel"))[2]
-        assert "Overruled by the admins" in page and "bobby" not in page.split("Overruled")[1][:40] and "Admin: keep" not in page
-        assert "Admin: keep" not in req(port, "GET", "/", cookie=login(port, "palma"))[2]
+        assert req(port, "POST", "/override", {"key": "1005", "verdict": "drop"}, login(port, "carol"))[0] == 403
+        assert req(port, "POST", "/override", {"key": "1005", "verdict": "drop"}, login(port, "bob"))[0] == 303
+        assert state.load(cfg.state_path)["shows"]["1005"]["override"]["by"] == "bob" and ran == [1]
+        page = req(port, "GET", "/", cookie=login(port, "alice"))[2]
+        assert "Overruled by the admins" in page and "bob" not in page.split("Overruled")[1][:40] and "Admin: keep" not in page
+        assert "Admin: keep" not in req(port, "GET", "/", cookie=login(port, "carol"))[2]
     finally:
         srv.shutdown()
 
@@ -131,7 +131,7 @@ def test_rate_page_only_accepts_recently_watched(app):
     cfg, c, port = app
     c.jellyfin.recent["u3"] = [{"Type": "Episode", "Id": "ep9", "SeriesId": "s1", "SeriesName": "Some Show"},
                                {"Type": "Movie", "Id": "mv1", "Name": "Some Film", "ProductionYear": 2025}]
-    cookie = login(port, "palma")
+    cookie = login(port, "carol")
     page = req(port, "GET", "/rate", cookie=cookie)[2]
     assert "Some Show" in page and "Some Film (2025)" in page and "Download user backup" not in page
     assert req(port, "POST", "/rate", {"item": "s1", "value": "up"}, cookie)[0] == 303
@@ -143,11 +143,11 @@ def test_backup_download_admins_only(app, tmp_path):
     cfg, c, port = app
     snap = tmp_path / "bk" / "2026-09-26" / "users"
     snap.mkdir(parents=True)
-    (snap / "palma.json").write_text("{}")
+    (snap / "carol.json").write_text("{}")
     object.__setattr__(cfg, "backups_dir", str(tmp_path / "bk"))
-    assert req(port, "GET", "/admin/backup.zip", cookie=login(port, "palma"))[0] == 403
+    assert req(port, "GET", "/admin/backup.zip", cookie=login(port, "carol"))[0] == 403
     conn = http.client.HTTPConnection("127.0.0.1", port)
-    conn.request("GET", "/admin/backup.zip", headers={"Cookie": login(port, "adriel")})
+    conn.request("GET", "/admin/backup.zip", headers={"Cookie": login(port, "alice")})
     r = conn.getresponse()
     body = r.read()
     assert r.status == 200 and body[:2] == b"PK" and "userdata-2026-09-26.zip" in r.getheader("Content-Disposition")
@@ -157,9 +157,9 @@ def test_deep_link_to_one_title_survives_login(app):
     cfg, c, port = app
     status, _, body = req(port, "GET", "/?t=1005")
     assert status == 200 and 'name="t" value="1005"' in body                     # login form carries it
-    form = {"username": "bobby", "password": "pw", "t": "1005"}
+    form = {"username": "bob", "password": "pw", "t": "1005"}
     assert req(port, "POST", "/login", form, header="Location")[:2] == (303, "/#t-1005")
-    cookie = login(port, "bobby")
+    cookie = login(port, "bob")
     assert req(port, "GET", "/?t=movie:555", cookie=cookie, header="Location")[:2] == (303, "/#t-movie:555")
     page = req(port, "GET", "/", cookie=cookie)[2]
     assert 'id="t-1005"' in page and ":target" in page
@@ -169,13 +169,13 @@ def test_deep_link_ignores_junk(app):
     cfg, c, port = app
     status, _, body = req(port, "GET", '/?t="><script>')
     assert status == 200 and "<script>" not in body and 'name="t"' not in body
-    form = {"username": "bobby", "password": "pw", "t": "//evil.example"}
+    form = {"username": "bob", "password": "pw", "t": "//evil.example"}
     assert req(port, "POST", "/login", form, header="Location")[1] == "/"
 
 
 def test_post_routes_ignore_a_query_string(app):
     cfg, c, port = app
-    assert req(port, "POST", "/vote?from=qr", {"item": "jf1", "value": "up"}, login(port, "bobby"))[0] == 303
+    assert req(port, "POST", "/vote?from=qr", {"item": "jf1", "value": "up"}, login(port, "bob"))[0] == 303
     assert c.jellyfin.like[("jf1", "u2")] is True
 
 
@@ -184,5 +184,5 @@ def test_session_cookie_is_lax_so_a_scanned_qr_link_arrives_signed_in(app):
     # so every scan would ask for the password again. Lax still withholds them from cross-site POSTs
     # (every action here is a POST), which is what stops CSRF.
     _, _, port = app
-    cookie = req(port, "POST", "/login", {"username": "bobby", "password": "pw"})[1]
+    cookie = req(port, "POST", "/login", {"username": "bob", "password": "pw"})[1]
     assert "SameSite=Lax" in cookie and "HttpOnly" in cookie and "Secure" in cookie

@@ -5,7 +5,7 @@ from trials.config import Config
 def make_cfg(tmp_path, **kw):
     base = dict(seerr_url="http://seerr", seerr_key="k", sonarr_url="http://sonarr", sonarr_key="k",
                 jellyfin_url="http://jf", jellyfin_key="k", jellyfin_public_url="https://jf.example",
-                state_path=str(tmp_path / "state.json"), enforce=True)
+                state_path=str(tmp_path / "state.json"), enforce=True, admins="alice,bob")
     base.update(kw)
     return Config(**base)
 
@@ -93,7 +93,7 @@ class FakeSonarr:
 
 class FakeJellyfin:
     def __init__(self):
-        self.users_list = [{"Id": "u1", "Name": "adriel"}, {"Id": "u2", "Name": "bobby"}]
+        self.users_list = [{"Id": "u1", "Name": "alice"}, {"Id": "u2", "Name": "bob"}]
         self.index, self.eps, self.like, self.calls = {}, {}, {}, []
         self.movies, self.udata, self.recent = {}, {}, {}
         self.notify_fails = False
@@ -171,9 +171,9 @@ class FakeJellyfin:
         self.calls.append(("notify", tuple(created), tuple(deleted)))
 
     def authenticate(self, username, password):
-        users = {("adriel", "pw"): {"id": "u1", "name": "adriel", "admin": True},
-                 ("bobby", "pw"): {"id": "u2", "name": "bobby", "admin": False},   # admin via cfg.admins, not Jellyfin
-                 ("palma", "pw"): {"id": "u3", "name": "palma", "admin": False}}
+        users = {("alice", "pw"): {"id": "u1", "name": "alice", "admin": True},
+                 ("bob", "pw"): {"id": "u2", "name": "bob", "admin": False},   # admin via cfg.admins, not Jellyfin
+                 ("carol", "pw"): {"id": "u3", "name": "carol", "admin": False}}
         return users.get((username, password))
 
 

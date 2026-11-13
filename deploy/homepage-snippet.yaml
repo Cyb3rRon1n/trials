@@ -1,5 +1,5 @@
 - Trial Shows:
-    href: https://trials.totallylegitmedia.us
+    href: https://trials.example.com
     icon: mdi-thumbs-up-down
     description: Vote to keep or drop this week's trial shows (Trials library in Jellyfin)
     siteMonitor: http://trials:8080/healthz
