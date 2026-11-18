@@ -9,7 +9,7 @@ description = "Trial Shows for Jellyfin: weekly trending-show trials, votes, kee
 readme = "README.md"
 requires-python = ">=3.11"
 # pinned: the Docker image installs exactly these (QR "scan to vote" badge on trial artwork)
-dependencies = ["pillow==12.3.0", "qrcode==8.2"]
+dependencies = ["pillow==13.0.0", "qrcode==8.2"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "zxing-cpp==3.1.1"]   # zxing-cpp: decodes the QR back in tests
