@@ -9,7 +9,9 @@ AUTH_CLIENT = 'MediaBrowser Client="trials", Device="trials-web", DeviceId="tria
 
 
 class ApiError(Exception):
-    pass
+    def __init__(self, msg, status=None):
+        super().__init__(msg)
+        self.status = status
 
 
 def urllib_transport(method, url, headers, data):
@@ -38,7 +40,7 @@ class Http:
         headers = dict(self.headers, **({"Content-Type": ctype} if ctype else {}))
         status, raw = self.transport(method, url, headers, data)
         if status not in ok:
-            raise ApiError(f"{method} {path} -> HTTP {status}: {raw[:200]!r}")
+            raise ApiError(f"{method} {path} -> HTTP {status}: {raw[:200]!r}", status)
         return status, raw
 
 

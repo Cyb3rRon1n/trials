@@ -5,6 +5,7 @@ import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
+from .clients import ApiError
 from .decide import UserView, decide, user_verdict
 from .library import choose_destination, ep_key, restore_plan
 
@@ -572,6 +573,7 @@ def finish_move(c, rec, index, users, now):
             return []
         rec.update(status="kept", played=None)
         return [f"{rec['title']}: kept, but Jellyfin never showed its new location after 7 days - watched marks NOT restored"]
+    blocked = set()   # users who watched it On Trial but can't see its permanent library (access / parental rating)
     if users:
         if is_movie(rec):
             new_items = {"movie": jf["Id"]}
@@ -580,18 +582,30 @@ def finish_move(c, rec, index, users, now):
                          for e in c.jellyfin.all_episodes(jf["Id"], users[0]["Id"]) if e.get("IndexNumber")}
         if needed - set(new_items) and age < GIVE_UP:
             return []
+
+        def for_user(user_id, fn, *a):
+            if user_id in blocked:
+                return
+            try:
+                fn(*a)
+            except ApiError as e:
+                if e.status != 404:
+                    raise
+                blocked.add(user_id)
         for user_id, item_id, played, ticks, count, date in restore_plan(snap, new_items):
-            c.jellyfin.restore_played(item_id, user_id, played, ticks, count, date)
+            for_user(user_id, c.jellyfin.restore_played, item_id, user_id, played, ticks, count, date)
         for user_id, t in (rec.get("taste") or {}).items():
             if t.get("likes") is not None:
-                c.jellyfin.set_like(jf["Id"], user_id, t["likes"])
+                for_user(user_id, c.jellyfin.set_like, jf["Id"], user_id, t["likes"])
             if t.get("fav"):
-                c.jellyfin.set_favorite(jf["Id"], user_id, True)
+                for_user(user_id, c.jellyfin.set_favorite, jf["Id"], user_id, True)
         missing = sorted(needed - set(new_items))
     else:
         new_items = {}
         missing = sorted(needed)
     art_note = _qr_restore(c, rec, jf["Id"])
+    if blocked:
+        art_note += f" ({len(blocked)} user(s) can't see it in its permanent library - their marks were skipped)"
     rec.update(status="kept", played=None, taste=None)
     if missing:
         return [f"{rec['title']}: kept, watched marks restored except {missing} (not found in Jellyfin after 7 days){art_note}"]
@@ -820,7 +834,7 @@ def daily_decide(cfg, c, st, now, lines=None):
 
     if not cfg.enforce:
         if len(drops) > cfg.max_deletes_per_run:
-            lines.append(f"[dry-run] would hit SAFETY STOP: {len(drops)} deletions due (> {cfg.max_deletes_per_run})")
+            lines.append(f"[dry-run] would hit SAFETY LIMIT: {len(drops)} deletions due (> {cfg.max_deletes_per_run})")
         for label, group in (("KEEP", keeps), ("DELETE", drops)):
             for rec, _, why in group:
                 rec["dry_run"] = f"would {label} ({why})"
@@ -831,8 +845,12 @@ def daily_decide(cfg, c, st, now, lines=None):
         return lines
 
     if len(drops) > cfg.max_deletes_per_run:
-        lines.insert(0, f"SAFETY STOP: {len(drops)} deletions due (> {cfg.max_deletes_per_run}); nothing deleted - check the trials app")
-        drops = []
+        # oldest first, at most max per run: a backlog clears itself a few a day, a bug can't wipe the library
+        drops.sort(key=lambda d: d[0].get("window_start") or d[0]["added_at"])
+        later = len(drops) - cfg.max_deletes_per_run
+        lines.insert(0, f"SAFETY LIMIT: {len(drops)} deletions due (> {cfg.max_deletes_per_run}); deleting the "
+                        f"{cfg.max_deletes_per_run} oldest now, {later} left for later runs - check the trials app")
+        drops = drops[:cfg.max_deletes_per_run]
     for rec, s, why in keeps:
         lines.append(apply_keep(cfg, c, rec, s, tag, movie_index if is_movie(rec) else index, users, now, why))
     for rec, s, why in drops:

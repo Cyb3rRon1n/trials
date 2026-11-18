@@ -41,10 +41,10 @@ override a vote (Jellyfin administrators always can).
 
 - Dry-run first. Turn on real deletions by setting `TRIALS_ENFORCE=1` in `.env` and recreating
   the container (`docker compose up -d trials`).
-- **SAFETY STOP:** when more than `MAX_DELETES_PER_RUN` deletions are due (common right after
-  enabling enforce, or after an outage), nothing is deleted and an alert is sent. To clear a
-  backlog you've reviewed on the voting page, temporarily set `MAX_DELETES_PER_RUN` higher,
-  recreate the container, run `docker exec trials python -m trials decide`, then set it back.
+- **SAFETY LIMIT:** at most `MAX_DELETES_PER_RUN` (3) deletions per daily run. When more are due
+  (common right after enabling enforce, or after an outage), the oldest go first, the rest wait for
+  later runs, and an alert is sent - so a backlog clears itself and a bug can't wipe the library.
+  To clear a reviewed backlog at once: `docker exec -e MAX_DELETES_PER_RUN=<n> trials python -m trials decide`.
 - Manual `add`/`decide` via `docker exec` are safe while the service runs (state is file-locked).
 - Removing the `trial` tag from a series in Sonarr (or deleting the tag) hands that show back to
   you: it's never judged again.

@@ -1,3 +1,4 @@
+from trials.clients import ApiError
 from datetime import datetime, timedelta, timezone
 from trials.config import Config
 
@@ -153,6 +154,8 @@ class FakeJellyfin:
         self.calls.append(("like", item_id, user_id, likes))
 
     def restore_played(self, item_id, user_id, played, ticks, count=0, date=None):
+        if user_id in getattr(self, "no_access", ()):   # Jellyfin 404s items a user can't see
+            raise ApiError(f"POST /UserItems/{item_id}/UserData -> HTTP 404", 404)
         self.calls.append(("played", item_id, user_id) if played else ("pos", item_id, user_id, ticks))
         self.restored = getattr(self, "restored", []) + [(item_id, user_id, played, ticks, count, date)]
 

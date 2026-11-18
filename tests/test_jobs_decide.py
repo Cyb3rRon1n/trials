@@ -160,7 +160,7 @@ def test_trial_tagged_series_not_in_state_is_ignored(tmp_path):
     assert 999 in c.sonarr.series_db and not [x for x in c.sonarr.calls if x[1:2] == (999,)]
 
 
-def test_deletion_ceiling_deletes_nothing(tmp_path):
+def test_deletion_ceiling_of_zero_deletes_nothing(tmp_path):
     cfg, c, st, rec, sid = world(tmp_path, max_deletes_per_run=0)
     # Plain Show: no engagement -> delete
     arrive(c, sid)
@@ -178,7 +178,7 @@ def test_deletion_ceiling_deletes_nothing(tmp_path):
     c.jellyfin.like[("jf6", "u1")] = True
 
     lines = daily_decide(cfg, c, st, NOW)
-    assert "SAFETY STOP" in lines[0] and sid in c.sonarr.series_db and rec["status"] == "active"
+    assert "SAFETY LIMIT" in lines[0] and sid in c.sonarr.series_db and rec["status"] == "active"
     assert ("move", sid2, "/data/media/tv") in c.sonarr.calls  # Liked Show still moved
 
 
@@ -306,7 +306,7 @@ def test_dry_run_safety_stop_and_label_change(tmp_path):
     open_window_ended(c, st, rec, sid)
     c.jellyfin.eps[("jf1", "u1")] = [ep("e1", 1), ep("e2", 2), ep("e3", 3)]  # dislike -> delete
     first = daily_decide(cfg, c, st, NOW)
-    assert any("would hit SAFETY STOP" in l for l in first)
+    assert any("would hit SAFETY LIMIT" in l for l in first)
     assert any("[dry-run] would DELETE" in l for l in first)
     # Change verdict: give user a like
     c.jellyfin.like[("jf1", "u1")] = True
@@ -379,3 +379,38 @@ def test_keep_clears_the_on_trial_note(tmp_path):
     c.jellyfin.eps[("jf1", "u1")] = [ep("e1", 1, True), ep("e2", 2, True), ep("e3", 3, True)]
     daily_decide(cfg, c, st, NOW)
     assert ("note", "jf1", None) in c.jellyfin.calls and rec["status"] == "moving"
+
+
+def test_deletion_ceiling_deletes_the_oldest_up_to_the_limit(tmp_path):
+    # a backlog over the limit clears a few per run, oldest window first, instead of blocking forever
+    cfg, c, st, rec, sid = world(tmp_path, max_deletes_per_run=1)
+    open_window_ended(c, st, rec, sid)
+    c.jellyfin.eps[("jf1", "u1")] = [ep("e1", 1), ep("e2", 2), ep("e3", 3)]  # no engagement -> delete
+    rec2 = legacy_trial(cfg, c, st, 6, 1006, "Older Show", NOW - timedelta(days=40))
+    sid2 = rec2["sonarr_id"]
+    arrive(c, sid2)
+    rec2["window_start"] = iso(NOW - timedelta(days=30))
+    c.jellyfin.index["/data/media/trials/Older Show"] = {"Id": "jf6"}
+    c.jellyfin.eps[("jf6", "u1")] = [ep("f1", 1), ep("f2", 2), ep("f3", 3)]
+    lines = daily_decide(cfg, c, st, NOW)
+    assert "SAFETY LIMIT: 2 deletions due" in lines[0] and "1 left for later" in lines[0]
+    assert sid2 not in c.sonarr.series_db and sid in c.sonarr.series_db
+    assert rec["status"] == "active"
+    daily_decide(cfg, c, st, NOW + timedelta(days=1))
+    assert sid not in c.sonarr.series_db
+
+
+def test_finish_move_skips_users_who_cannot_see_the_permanent_library(tmp_path):
+    # a user watched it On Trial but has no access to the destination library: Jellyfin 404s
+    # their marks - skip them, don't abort the whole decide run (and every deletion with it)
+    cfg, c, st, rec, sid = world(tmp_path)
+    open_window_ended(c, st, rec, sid)
+    c.jellyfin.eps[("jf1", "u1")] = [ep("e1", 1, True), ep("e2", 2, True), ep("e3", 3, True)]  # like
+    daily_decide(cfg, c, st, NOW)
+    assert rec["status"] == "moving"
+    c.jellyfin.index = {"/data/media/tv/Plain Show": {"Id": "jf2"}}
+    c.jellyfin.eps[("jf2", "u1")] = [ep("n1", 1), ep("n2", 2), ep("n3", 3)]
+    c.jellyfin.no_access = {"u1"}
+    lines = daily_decide(cfg, c, st, NOW + timedelta(days=1))
+    assert rec["status"] == "kept"
+    assert any("1 user(s) can't see it" in l for l in lines)
